@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.4
+ * Version: 1.22.5
  * Author: Matt Finlay
  *
  * USAGE:
@@ -469,7 +469,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.4', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.5', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -796,6 +796,10 @@ JS;
 		?>
 		<div class="v4v-musiclink v4v-musiclink-missing-params">
 			<p class="v4v-musiclink-error"><?php echo esc_html( $reason ? $reason : __( 'Missing parameter(s)', 'v4v-musiclink' ) ); ?></p>
+			<p><?php esc_html_e( 'params:', 'v4v-musiclink' ); ?></p>
+			<pre>album="&lt;album-guid&gt;"</pre>
+			<pre>track="&lt;track-guid&gt;" (optional)</pre>
+			<pre>header="&lt;true/false&gt;" (optional)</pre>
 			<p><?php esc_html_e( 'Usage:', 'v4v-musiclink' ); ?></p>
 			<pre>[musiclink album="&lt;album-guid&gt;"]</pre>
 			<pre>[musiclink album="&lt;album-guid&gt;" track="&lt;track-guid&gt;"]</pre>

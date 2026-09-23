@@ -3,6 +3,11 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.5] - 2026-09-23
+
+### Added
+- **Parameter list on the "Missing parameter(s)" message** (front end): a `params:` section now appears above the `Usage:` examples, listing `album="<album-guid>"`, `track="<track-guid>" (optional)` and `header="<true/false>" (optional)`. Each line uses the same `<pre>` markup as the examples, so it picks up the existing `.v4v-musiclink-missing-params` chip styling with no CSS change. The list also shows with the "Album/Song not found" reason, which shares this message and its Usage block.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.7] - 2026-09-23
 
 ### Added
