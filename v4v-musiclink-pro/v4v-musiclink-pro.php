@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.13
+ * Version: 1.20.14
  * Author: Matt Finlay
  *
  * USAGE:
@@ -87,19 +87,29 @@
  * list while the site default is the opposite. Unrecognized header
  * values fall back to the admin setting.
  *
- * VIEW LOGGING: every time a guid supplied in the URL successfully resolves
- * to a real release, one row (date, artist, album, track) is logged to a
- * dedicated database table, `{wp_prefix}v4v_musiclink_pro_log` - created
- * automatically on first load after this version is installed. The
- * album/track guids themselves are never stored: the three text columns
- * hold titles resolved from Music Index, and nothing else is written
- * anywhere (no error log, no debug file). Releases hardcoded into a
- * shortcode attribute are not logged at all - they would otherwise add a
- * row on every render of that post, feeds and crawlers included. Logged
- * unconditionally per URL-driven view, not deduplicated per
- * visitor/session. View the latest entries and run aggregated reports
- * from the "View Log" and "Reports" tabs under Settings > V4V MusicLink
- * Pro; the View Log tab can also clear the table.
+ * VIEW LOGGING: two kinds of row go into the dedicated table
+ * `{wp_prefix}v4v_musiclink_pro_log` - created automatically on first load
+ * after this version is installed, and altered in place on upgrade (the
+ * `app` column arrived with app-launch logging; schema version 1 -> 2):
+ *
+ *   - VIEWS: a guid supplied in the URL that resolves to a real release.
+ *     One row per URL-driven render. Releases hardcoded into a shortcode
+ *     attribute are not logged as views - that would add a row on every
+ *     render of the post, feeds and crawlers included.
+ *   - LAUNCHES: a click on an app button that actually navigates. One row
+ *     carrying the same date/artist/album/track plus the `app` slug,
+ *     from every placement (a click is a deliberate action), and only
+ *     when the click goes through - cancelling Fountain's modal dialog
+ *     logs nothing.
+ *
+ * The columns hold titles resolved from Music Index; the album/track
+ * guids that drove a row are never stored, and nothing is written
+ * anywhere else (no error log, no debug file). Rows are logged
+ * unconditionally, not deduplicated per visitor/session. Read them and
+ * run the reports - "Total by Artist/Album/Track" counts views,
+ * "Total by Music App" counts launches - from the View Log and Reports
+ * tabs under Settings > V4V MusicLink Pro, which can also clear the
+ * table.
  *
  * NOT FOUND HANDLING: if a guid is validly formatted but Music Index has no
  * matching release, the page falls back to the search view (same as no
@@ -139,6 +149,8 @@ class V4V_Music_Link_Resolver_Pro {
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_v4v_musiclink_pro_search', array( $this, 'ajax_search' ) );
 		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_search', array( $this, 'ajax_search' ) );
+		add_action( 'wp_ajax_v4v_musiclink_pro_log_app', array( $this, 'ajax_log_app' ) );
+		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_log_app', array( $this, 'ajax_log_app' ) );
 		add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_post_v4v_musiclink_pro_clear_log', array( $this, 'handle_clear_log' ) );
@@ -199,11 +211,14 @@ class V4V_Music_Link_Resolver_Pro {
 	 * normal activation hook would never fire for this change.
 	 */
 	private function maybe_create_log_table() {
-		if ( '1' === get_option( 'v4v_musiclink_pro_log_table_version' ) ) {
+		// '1' = rows are views only; '2' adds the app column (+ index) that
+		// launch rows need, so an install last written before app-launch
+		// logging runs dbDelta once more and is altered in place.
+		if ( '2' === get_option( 'v4v_musiclink_pro_log_table_version' ) ) {
 			return;
 		}
 		self::create_log_table();
-		update_option( 'v4v_musiclink_pro_log_table_version', '1' );
+		update_option( 'v4v_musiclink_pro_log_table_version', '2' );
 	}
 
 	public static function create_log_table() {
@@ -217,7 +232,9 @@ class V4V_Music_Link_Resolver_Pro {
 			artist VARCHAR(255) NOT NULL DEFAULT '',
 			album VARCHAR(255) NOT NULL DEFAULT '',
 			track VARCHAR(255) NOT NULL DEFAULT '',
-			PRIMARY KEY  (id)
+			app VARCHAR(64) NOT NULL DEFAULT '',
+			PRIMARY KEY  (id),
+			KEY app (app)
 		) {$charset_collate};";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -225,16 +242,23 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * Logs one row per successfully-resolved page view (a guid that
-	 * actually matched something in Music Index) - date, artist, album,
-	 * and track (blank when it's an album-only view). Only titles resolved
-	 * from Music Index are stored; the album/track guids that drove the
-	 * view never are. Called for URL-driven views only - render() skips it
-	 * when the guid came from a hardcoded shortcode attribute. Logged
-	 * unconditionally on every qualifying view, not deduplicated per
+	 * Logs one row: date, artist, album, track (blank when it's an
+	 * album-only view) plus the music app that was launched - blank for a
+	 * plain page view, one of app_registry()'s slugs for a button launch.
+	 * Only titles resolved from Music Index are stored; the album/track
+	 * guids that drove the row never are. Page views are logged for
+	 * URL-driven renders only (render() skips this when the guid came from
+	 * a hardcoded shortcode attribute); launches are logged wherever the
+	 * button was clicked, because a click is a deliberate action. Logged
+	 * unconditionally on every qualifying row, not deduplicated per
 	 * visitor/session.
+	 *
+	 * @param string $artist      Resolved artist title.
+	 * @param string $album_title Resolved album title.
+	 * @param string $track_title Resolved track title, or ''.
+	 * @param string $app         Launched app slug, or '' for a view.
 	 */
-	private function log_view( $artist, $album_title, $track_title ) {
+	private function log_view( $artist, $album_title, $track_title, $app = '' ) {
 		global $wpdb;
 		$wpdb->insert(
 			$wpdb->prefix . 'v4v_musiclink_pro_log',
@@ -243,9 +267,42 @@ class V4V_Music_Link_Resolver_Pro {
 				'artist'    => $artist,
 				'album'     => $album_title,
 				'track'     => $track_title,
+				'app'       => $app,
 			),
-			array( '%s', '%s', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s' )
 		);
+	}
+
+	/**
+	 * AJAX beacon fired the instant an app button actually launches. The
+	 * page sends the release's guids (read off the DOM, so it works with
+	 * or without a query string) and the app slug; the titles are resolved
+	 * server-side before anything is written, so the client never decides
+	 * what lands in the log. The slug has to be one of the registry's, and
+	 * the guids have to resolve to a real release, otherwise nothing is
+	 * recorded.
+	 */
+	public function ajax_log_app() {
+		check_ajax_referer( 'v4v_musiclink_pro_log_app', 'nonce' );
+
+		$album    = isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '';
+		$track    = isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '';
+		$app      = isset( $_POST['app'] ) ? sanitize_key( wp_unslash( $_POST['app'] ) ) : '';
+		$registry = $this->app_registry();
+
+		if ( ! $album || ! isset( $registry[ $app ] ) ) {
+			wp_send_json_error( null, 400 );
+		}
+
+		$has_track = ! empty( $track );
+		$release   = $this->resolve_release_meta( $album, $track, $has_track );
+
+		if ( ! $release['album_title'] && ! $release['track_title'] ) {
+			wp_send_json_error( null, 404 );
+		}
+
+		$this->log_view( $release['artist'], $release['album_title'], $release['track_title'], $app );
+		wp_send_json_success( array( 'app' => $app ) );
 	}
 
 	/**
@@ -488,7 +545,7 @@ class V4V_Music_Link_Resolver_Pro {
 		$custom_start  = isset( $_GET['date_start'] ) ? sanitize_text_field( wp_unslash( $_GET['date_start'] ) ) : '';
 		$custom_end    = isset( $_GET['date_end'] ) ? sanitize_text_field( wp_unslash( $_GET['date_end'] ) ) : '';
 
-		if ( ! in_array( $report_type, array( 'artist', 'album', 'track' ), true ) ) {
+		if ( ! in_array( $report_type, array( 'artist', 'album', 'track', 'app' ), true ) ) {
 			$report_type = 'artist';
 		}
 		if ( ! in_array( $date_range, array( 'today', '7days', '30days', '90days', 'all', 'custom' ), true ) ) {
@@ -508,6 +565,7 @@ class V4V_Music_Link_Resolver_Pro {
 							<option value="artist" <?php selected( $report_type, 'artist' ); ?>><?php esc_html_e( 'Total by Artist', 'v4v-musiclink-pro' ); ?></option>
 							<option value="album" <?php selected( $report_type, 'album' ); ?>><?php esc_html_e( 'Total by Album', 'v4v-musiclink-pro' ); ?></option>
 							<option value="track" <?php selected( $report_type, 'track' ); ?>><?php esc_html_e( 'Total by Track', 'v4v-musiclink-pro' ); ?></option>
+							<option value="app" <?php selected( $report_type, 'app' ); ?>><?php esc_html_e( 'Total by Music App', 'v4v-musiclink-pro' ); ?></option>
 						</select>
 					</td>
 				</tr>
@@ -567,6 +625,16 @@ class V4V_Music_Link_Resolver_Pro {
 		if ( 'track' === $report_type ) {
 			$where[] = "track != ''";
 		}
+		if ( 'app' === $report_type ) {
+			// Launch rows only - a blank app means a plain page view.
+			$where[] = "app != ''";
+		} else {
+			// Keep launch rows out of the three view reports: a launch
+			// repeats the artist/album/track of the click it came from, so
+			// counting both would double up numbers that have always meant
+			// "logged views".
+			$where[] = "app = ''";
+		}
 		if ( $artist_filter ) {
 			$where[]  = 'artist LIKE %s';
 			$params[] = '%' . $wpdb->esc_like( $artist_filter ) . '%';
@@ -585,12 +653,17 @@ class V4V_Music_Link_Resolver_Pro {
 			$sql = "SELECT artist AS label, COUNT(*) AS total FROM {$table_name} WHERE {$where_sql} GROUP BY artist ORDER BY total DESC";
 		} elseif ( 'album' === $report_type ) {
 			$sql = "SELECT album AS label, artist, COUNT(*) AS total FROM {$table_name} WHERE {$where_sql} GROUP BY album, artist ORDER BY total DESC";
+		} elseif ( 'app' === $report_type ) {
+			$sql = "SELECT app AS label, COUNT(*) AS total FROM {$table_name} WHERE {$where_sql} GROUP BY app ORDER BY total DESC";
 		} else {
 			$sql = "SELECT track AS label, album, artist, COUNT(*) AS total FROM {$table_name} WHERE {$where_sql} GROUP BY track, album, artist ORDER BY total DESC";
 		}
 
 		$prepared = $params ? $wpdb->prepare( $sql, $params ) : $sql;
 		$rows     = $wpdb->get_results( $prepared );
+
+		// Label + supporting columns + Total (2, or 3/4 with extras).
+		$colspan = 2 + ( 'album' === $report_type ? 1 : 0 ) + ( 'track' === $report_type ? 2 : 0 );
 		?>
 		<table class="widefat striped" style="margin-top:1.5em;">
 			<thead>
@@ -600,25 +673,35 @@ class V4V_Music_Link_Resolver_Pro {
 					<?php elseif ( 'album' === $report_type ) : ?>
 						<th><?php esc_html_e( 'Album', 'v4v-musiclink-pro' ); ?></th>
 						<th><?php esc_html_e( 'Artist', 'v4v-musiclink-pro' ); ?></th>
+					<?php elseif ( 'app' === $report_type ) : ?>
+						<th><?php esc_html_e( 'Music App', 'v4v-musiclink-pro' ); ?></th>
 					<?php else : ?>
 						<th><?php esc_html_e( 'Track', 'v4v-musiclink-pro' ); ?></th>
 						<th><?php esc_html_e( 'Album', 'v4v-musiclink-pro' ); ?></th>
 						<th><?php esc_html_e( 'Artist', 'v4v-musiclink-pro' ); ?></th>
 					<?php endif; ?>
-					<th><?php esc_html_e( 'Total Views', 'v4v-musiclink-pro' ); ?></th>
+					<th>
+						<?php
+						if ( 'app' === $report_type ) {
+							esc_html_e( 'Total Launches', 'v4v-musiclink-pro' );
+						} else {
+							esc_html_e( 'Total Views', 'v4v-musiclink-pro' );
+						}
+						?>
+					</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
-					<tr><td colspan="4"><?php esc_html_e( 'No matching data.', 'v4v-musiclink-pro' ); ?></td></tr>
+					<tr><td colspan="<?php echo (int) $colspan; ?>"><?php esc_html_e( 'No matching data.', 'v4v-musiclink-pro' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
-							<td><?php echo esc_html( $row->label ? $row->label : '—' ); ?></td>
+							<td><?php echo esc_html( 'app' === $report_type ? $this->app_display_label( $row->label ) : ( $row->label ? $row->label : '—' ) ); ?></td>
 							<?php if ( 'track' === $report_type ) : ?>
 								<td><?php echo esc_html( $row->album ? $row->album : '—' ); ?></td>
 							<?php endif; ?>
-							<?php if ( 'artist' !== $report_type ) : ?>
+							<?php if ( in_array( $report_type, array( 'album', 'track' ), true ) ) : ?>
 								<td><?php echo esc_html( $row->artist ? $row->artist : '—' ); ?></td>
 							<?php endif; ?>
 							<td><?php echo esc_html( $row->total ); ?></td>
@@ -637,7 +720,7 @@ class V4V_Music_Link_Resolver_Pro {
 	private function render_log_tab_content() {
 		global $wpdb;
 		$table_name = $wpdb->prefix . 'v4v_musiclink_pro_log';
-		$rows       = $wpdb->get_results( "SELECT logged_at, artist, album, track FROM {$table_name} ORDER BY id DESC LIMIT 100" );
+		$rows       = $wpdb->get_results( "SELECT logged_at, artist, album, track, app FROM {$table_name} ORDER BY id DESC LIMIT 100" );
 		$total      = $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" );
 
 		// admin-post.php action for emptying the table, nonce-bound so a
@@ -657,8 +740,8 @@ class V4V_Music_Link_Resolver_Pro {
 		<p>
 			<?php
 			printf(
-				/* translators: %d: total number of logged views */
-				esc_html__( 'Showing the most recent 100 of %d total logged views.', 'v4v-musiclink-pro' ),
+				/* translators: %d: total number of log entries (page views and app launches) */
+				esc_html__( 'Showing the most recent 100 of %d total log entries.', 'v4v-musiclink-pro' ),
 				(int) $total
 			);
 			?>
@@ -681,11 +764,12 @@ class V4V_Music_Link_Resolver_Pro {
 					<th><?php esc_html_e( 'Artist', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Album', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Track', 'v4v-musiclink-pro' ); ?></th>
+					<th><?php esc_html_e( 'App', 'v4v-musiclink-pro' ); ?></th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
-					<tr><td colspan="4"><?php esc_html_e( 'No views logged yet.', 'v4v-musiclink-pro' ); ?></td></tr>
+					<tr><td colspan="5"><?php esc_html_e( 'No views logged yet.', 'v4v-musiclink-pro' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
@@ -693,6 +777,8 @@ class V4V_Music_Link_Resolver_Pro {
 							<td><?php echo esc_html( $row->artist ); ?></td>
 							<td><?php echo esc_html( $row->album ); ?></td>
 							<td><?php echo esc_html( $row->track ? $row->track : '—' ); ?></td>
+							<?php /* Blank app = a page view; a slug = the button that launched. */ ?>
+							<td><?php echo esc_html( $row->app ? $this->app_display_label( $row->app ) : '—' ); ?></td>
 						</tr>
 					<?php endforeach; ?>
 				<?php endif; ?>
@@ -769,6 +855,16 @@ class V4V_Music_Link_Resolver_Pro {
 			'v4vmusic'    => array( 'label' => 'v4vmusic.com', 'domain' => 'v4vmusic.com' ),
 			'fountain'    => array( 'label' => 'Fountain.fm', 'domain' => 'fountain.fm' ),
 		);
+	}
+
+	/**
+	 * Display name for a stored app slug. Falls back to the slug itself so
+	 * a row written before an app was removed from the registry still
+	 * renders as something readable instead of a blank cell.
+	 */
+	private function app_display_label( $slug ) {
+		$registry = $this->app_registry();
+		return isset( $registry[ $slug ] ) ? $registry[ $slug ]['label'] : (string) $slug;
 	}
 
 	private function get_app_config( $slug ) {
@@ -1159,12 +1255,15 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.13', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.14', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
-			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-			'nonce'   => wp_create_nonce( 'v4v_musiclink_pro_search' ),
-			'i18n'    => array(
+			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
+			'nonce'     => wp_create_nonce( 'v4v_musiclink_pro_search' ),
+			// Separate nonce for the launch beacon, so a token lifted from
+			// the page can't be replayed against the other endpoint.
+			'logNonce'  => wp_create_nonce( 'v4v_musiclink_pro_log_app' ),
+			'i18n'      => array(
 				'searching'   => __( 'Searching…', 'v4v-musiclink-pro' ),
 				'noResults'   => __( 'No results found.', 'v4v-musiclink-pro' ),
 				'searchError' => __( 'Search failed - please try again.', 'v4v-musiclink-pro' ),
@@ -1433,6 +1532,40 @@ class V4V_Music_Link_Resolver_Pro {
 				});
 			}
 
+			// Fire-and-forget beacon for a button that actually launches.
+			// sendBeacon survives the target=_blank navigation that follows
+			// the click, and the guids are read off the container so this
+			// works the same for URL-driven and shortcode-embedded
+			// releases. Only the guids, the nonce and the slug cross the
+			// wire - the server resolves and stores the titles itself.
+			function logLaunch(slug) {
+				var container = document.querySelector(".v4v-musiclink-pro");
+				var album = container ? (container.getAttribute("data-album") || "") : "";
+				if (!slug || !album) { return; }
+
+				var body = new URLSearchParams();
+				body.append("action", "v4v_musiclink_pro_log_app");
+				body.append("nonce", v4vMusicLinkPro.logNonce);
+				body.append("album", album);
+				body.append("track", container.getAttribute("data-track") || "");
+				body.append("app", slug);
+
+				if (navigator.sendBeacon) {
+					navigator.sendBeacon(v4vMusicLinkPro.ajaxUrl, body);
+				} else {
+					fetch(v4vMusicLinkPro.ajaxUrl, { method: "POST", body: body, keepalive: true }).catch(function () {});
+				}
+			}
+
+			// Every button except Fountain: that one goes through its own
+			// modal below, and a cancelled modal never launches anything.
+			document.querySelectorAll(".v4v-musiclink-pro-item[data-app]").forEach(function (item) {
+				var link = item.querySelector("a");
+				var slug = item.getAttribute("data-app");
+				if (!link || !slug || "fountain" === slug) { return; }
+				link.addEventListener("click", function () { logLaunch(slug); });
+			});
+
 			document.querySelectorAll(".v4v-musiclink-pro-share-btn").forEach(function (btn) {
 				btn.addEventListener("click", function () {
 					var url = btn.getAttribute("data-url");
@@ -1470,7 +1603,12 @@ class V4V_Music_Link_Resolver_Pro {
 						e.preventDefault();
 						pendingHref = href;
 						modal.classList.add("is-open");
+						// Nothing has launched yet - cancelling (button,
+						// Escape or backdrop) closes without logging.
+						return;
 					}
+					// A resolved Fountain URL navigates away on this click.
+					logLaunch("fountain");
 				});
 
 				cancelBtn.addEventListener("click", closeModal);
@@ -1479,6 +1617,7 @@ class V4V_Music_Link_Resolver_Pro {
 					var href = pendingHref;
 					closeModal();
 					if (href) {
+						logLaunch("fountain");
 						window.open(href, "_blank", "noopener,noreferrer");
 					}
 				});
@@ -1769,7 +1908,7 @@ JS;
 		// the links happen to be assembled in above.
 		$links = $this->sort_links_by_app_order( $links );
 
-		return $this->render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header );
+		return $this->render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header, $album, $track );
 	}
 
 	/**
@@ -2361,7 +2500,7 @@ JS;
 		return is_array( $body ) ? $body : null;
 	}
 
-	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true ) {
+	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true, $album_guid = '', $track_guid = '' ) {
 		$heading = $has_track
 			? __( 'Listen to this track:', 'v4v-musiclink-pro' )
 			: __( 'Listen to this album:', 'v4v-musiclink-pro' );
@@ -2374,7 +2513,7 @@ JS;
 
 		ob_start();
 		?>
-		<div class="v4v-musiclink-pro">
+		<div class="v4v-musiclink-pro" data-album="<?php echo esc_attr( $album_guid ); ?>" data-track="<?php echo esc_attr( $track_guid ); ?>">
 			<?php if ( $show_header && ( $title_line || $art_url ) ) : ?>
 				<div class="v4v-musiclink-pro-header">
 					<div class="v4v-musiclink-pro-info">
@@ -2409,7 +2548,7 @@ JS;
 			<?php else : ?>
 				<ul class="v4v-musiclink-pro-list">
 					<?php foreach ( $links as $slug => $link ) : ?>
-						<li class="v4v-musiclink-pro-item v4v-musiclink-pro-<?php echo esc_attr( $slug ); ?>">
+						<li class="v4v-musiclink-pro-item v4v-musiclink-pro-<?php echo esc_attr( $slug ); ?>" data-app="<?php echo esc_attr( $slug ); ?>">
 							<a href="<?php echo esc_url( $link['url'] ); ?>" target="_blank" rel="noopener noreferrer">
 								<img
 									class="v4v-musiclink-pro-icon"

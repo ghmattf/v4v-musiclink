@@ -3,6 +3,18 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.14] - 2026-09-23
+
+### Added
+- **App button launches are logged**: every click that actually takes the visitor to the app now writes its own row - the same date/artist/album/track a view carries, plus the app that opened, in a new `app` column on `{wp_prefix}v4v_musiclink_pro_log` (added in place by dbDelta, schema version 1 → 2; pre-existing rows default to `app = ''` and so stay views). The page fires a `navigator.sendBeacon()` beacon (falling back to `fetch(…, {keepalive:true})`) the instant the anchor is followed, and Fountain's "unable to generate a link" modal counts **only on OK** - Cancel, Escape and a backdrop click navigate nowhere, so they log nothing; a already-resolved Fountain URL logs on the click itself. The beacon carries the guids (read off `data-album`/`data-track` on the button container, which is what makes shortcode-embedded releases work - they have no query string to read) and the app slug; **titles are resolved server-side before anything is written**, so the client never decides what lands in the log, only registry slugs are accepted (400 otherwise, 404 for guids that no longer resolve), and it is guarded by its own `logNonce`, separate from the search nonce. Launches are logged from every placement, including releases hardcoded into a shortcode attribute - a click is a deliberate action, unlike a render.
+- **New report: "Total by Music App"** - launches grouped by app under a "Total Launches" column, with the same artist filter and date-range presets as the existing reports. Slugs are displayed through the registry label, falling back to the slug itself so a row for an app that has since been retired still renders.
+
+### Changed
+- **View Log shows both kinds of row**: a new **App** column reads `—` for a page view and the app's name for a launch, and the count line now says "log entries" rather than "logged views" since it lists both. The **Clear log** button clears both kinds.
+- **The artist/album/track reports keep counting views only** (`app = ''`): a launch repeats the artist/album/track of the click behind it, so including both would double numbers that have always meant "logged views". The scope of each is now explicit - those three reports = views, Music App = launches.
+- **The button container emits `data-album`/`data-track`** (the beacon needs the guids). On a shareable page they were already in the URL; on a shortcode-embedded release they now appear in the page source too, where previously they existed only in the post editor.
+- The empty-row `colspan` in the reports table is now computed from the columns actually shown (it was a hardcoded 4, which over-spans the 2-column Artist report).
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.13] - 2026-09-23
 
 ### Added

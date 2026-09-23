@@ -32,8 +32,8 @@ The same functionality as the standard version, plus:
   https://example.com/musiclink?album={album-guid}&track={track-guid}
   ```
 - If no parameters are provided in either the shortcode or the URL, a search page is displayed where the user can search musicindex.org and select the album/track to display the regular page.
-- Usage of this plugin version is logged (one row per successfully resolved view whose guid came from the URL). Releases hardcoded into a shortcode attribute are not logged, and the raw `album`/`track` guids are never stored - only the titles Music Index returns.
-- The admin settings page adds a tab to display the logs (with a **Clear log** button), and another for running reports (totals by artist/album/track with date-range and artist filters).
+- Usage of this plugin version is logged: one row per successfully resolved view whose guid came from the URL, plus one row per app-button launch (same date/artist/album/track plus the app that opened). Releases hardcoded into a shortcode attribute are not logged as views - launches from them are - and the raw `album`/`track` guids are never stored, only the titles Music Index returns.
+- The admin settings page adds a tab to display the logs (with a **Clear log** button), and another for running reports - totals by artist/album/track (views) or by music app (launches), with date-range and artist filters.
 - Extras: optional Open Graph / Twitter Card social previews, a share button, and canonical URL fixes for guid'd URLs.
 
 Shortcode: `[musiclink_pro]` (accepts the same `album`/`track` attributes as the standard version).
