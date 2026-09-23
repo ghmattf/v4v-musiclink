@@ -3,6 +3,15 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.10] - 2026-09-23
+
+### Security
+- **Fountain script discovery now checks the exact host**: `fountain_autodetect_next_action()` accepted any script URL that merely *contained* the substrings `fountain.fm` and `_next`, so a page listing e.g. `https://evil.tld/fountain.fm/_next/x.js` would have made the server fetch an attacker-chosen URL. Sources are now normalised first (protocol-relative `//host/…`, root-relative `/…`) and only allowed when the parsed host is exactly `fountain.fm` or a subdomain of it - verified with 12 test cases covering the apex, subdomains, both relative forms, and the four substring/suffix/query bypass tricks.
+- **No redirect hops on outbound requests (SSRF hardening)**: all four `wp_remote_*` calls (Music Index API, Fountain search POST, Fountain homepage, Fountain script chunks) now use `redirection => 0` instead of WordPress's default 5, so an open redirect on a remote host can no longer bounce a server-side request to arbitrary - including internal - addresses. Checked against the live hosts first: none of them issue redirects on these paths today. If one ever starts, Fountain degrades gracefully to its plain link and Music Index lookups fail soft into the existing "Album/Song not found" path.
+
+### Changed
+- **Canonical URL is now rebuilt from the path plus the sanitised `album`/`track` args only**: `fix_canonical_url()` and the output-buffer rewrite previously echoed the raw `REQUEST_URI` (`add_query_arg( null, null )`), handing every other - attacker-supplied - query arg to filter consumers that don't all escape on output. Both producers of the canonical tag now share one new `musiclink_canonical_url()` helper, so they also can't disagree with each other. *Behaviour change:* `…/musiclink/?album=X&utm_source=Y` now canonicalises to `…/musiclink?album=X` (junk args are dropped).
+
 ## Resolver (v4v-musiclink) — [1.22.7] - 2026-09-23
 
 ### Security
