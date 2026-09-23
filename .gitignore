@@ -1,0 +1,20 @@
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Dependencies / build artifacts (none currently, but keep out if added)
+node_modules/
+vendor/
+
+# Local env / secrets
+.env
+.env.local
+
+# WordPress debug artifacts
+wp-content/*-debug.log
+*.log
