@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.6] - 2026-09-23
+
+### Added
+- **Admin-configurable Music apps order** (Settings → V4V MusicLink Pro): a new "Order" column in the Music apps table with ↑/↓ buttons moves each app up or down, and the `[musiclink_pro]` shortcode lists its buttons in that order. Positions are stored per app in the existing option (`v4v_musiclink_pro_apps[slug][order]`) and normalised to unique `0..n-1` on save, so re-saving cannot drift or collide. Options saved before this release carry no order yet and keep the current front-end order — no migration needed.
+
+### Changed
+- The **"Release header" row now appears above the "Music apps" row** on the settings page.
+- The "Release header" **checkbox is now a Show/Hide drop-down**; the option name and stored values are unchanged (`v4v_musiclink_pro_show_header`), so existing settings keep working. Its label dropped the leading "Show", which is now the drop-down's first option.
+- The Music apps description mentions the new Order column, and the file docblock documents both changes.
+
 ## Resolver (v4v-musiclink) — [1.22.3] - 2026-09-23
 
 ### Added

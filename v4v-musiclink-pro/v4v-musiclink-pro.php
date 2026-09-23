@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.5
+ * Version: 1.20.6
  * Author: Matt Finlay
  *
  * USAGE:
@@ -76,10 +76,12 @@
  * apps (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) can be
  * individually disabled (hides its button entirely) and/or given a custom
  * icon URL overriding the default live favicon.
+ * The same table's "Order" column (arrow buttons) sets the order in
+ * which those buttons are listed on the front end.
  *
  * HEADER CONTROLS: whether the release header (title, artist, artwork)
- * appears above the buttons defaults to the "Release header" checkbox
- * under Settings > V4V MusicLink Pro (default: shown). The optional
+ * appears above the buttons defaults to the "Release header" Show/Hide
+ * drop-down under Settings > V4V MusicLink Pro (default: Show). The optional
  * header="true" / header="false" shortcode attribute overrides that
  * setting per placement - useful when one page wants the bare button
  * list while the site default is the opposite. Unrecognized header
@@ -652,15 +654,92 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	public function sanitize_apps_settings( $value ) {
-		$clean = array();
-		foreach ( array_keys( $this->app_registry() ) as $slug ) {
+		$slugs  = array_keys( $this->app_registry() );
+		$orders = array();
+		$clean  = array();
+
+		foreach ( $slugs as $slug ) {
 			$row = isset( $value[ $slug ] ) && is_array( $value[ $slug ] ) ? $value[ $slug ] : array();
+			if ( isset( $row['order'] ) && '' !== $row['order'] ) {
+				$orders[ $slug ] = $row['order'];
+			}
 			$clean[ $slug ] = array(
 				'enabled'  => ! empty( $row['enabled'] ),
 				'icon_url' => ! empty( $row['icon_url'] ) ? esc_url_raw( trim( $row['icon_url'] ) ) : '',
 			);
 		}
+
+		// Positions are always stored as unique 0..n-1 values, so a saved
+		// order survives being re-saved without drifting or colliding.
+		foreach ( self::sort_slugs_by_order( $slugs, $orders ) as $position => $slug ) {
+			$clean[ $slug ]['order'] = $position;
+		}
+
 		return $clean;
+	}
+
+	/**
+	 * App slugs sorted by saved position. A slug with no saved position
+	 * (never configured) keeps its registry slot, and exact ties keep the
+	 * registry order too - usort() is only stable from PHP 8.0.
+	 */
+	private static function sort_slugs_by_order( $slugs, $orders ) {
+		$registry_order = array_flip( $slugs );
+		$sorted         = $slugs;
+
+		usort( $sorted, function ( $a, $b ) use ( $registry_order, $orders ) {
+			$a_position = isset( $orders[ $a ] ) ? (int) $orders[ $a ] : $registry_order[ $a ];
+			$b_position = isset( $orders[ $b ] ) ? (int) $orders[ $b ] : $registry_order[ $b ];
+
+			if ( $a_position === $b_position ) {
+				return $registry_order[ $a ] - $registry_order[ $b ];
+			}
+
+			return $a_position - $b_position;
+		} );
+
+		return $sorted;
+	}
+
+	/**
+	 * The app registry in the admin-configured button order. With no order
+	 * saved yet, this matches app_registry()'s hard-coded order exactly.
+	 */
+	private function ordered_app_registry() {
+		$registry = $this->app_registry();
+		$all      = get_option( 'v4v_musiclink_pro_apps', array() );
+		$orders   = array();
+
+		foreach ( array_keys( $registry ) as $slug ) {
+			if ( isset( $all[ $slug ]['order'] ) && '' !== $all[ $slug ]['order'] ) {
+				$orders[ $slug ] = $all[ $slug ]['order'];
+			}
+		}
+
+		$ordered = array();
+		foreach ( self::sort_slugs_by_order( array_keys( $registry ), $orders ) as $slug ) {
+			$ordered[ $slug ] = $registry[ $slug ];
+		}
+
+		return $ordered;
+	}
+
+	/**
+	 * Reorders the assembled shortcode link list to match the admin-
+	 * configured button order. Apps whose link couldn't be built simply
+	 * stay missing; any link outside the registry keeps its old slot.
+	 */
+	private function sort_links_by_app_order( $links ) {
+		$sorted = array();
+
+		foreach ( array_keys( $this->ordered_app_registry() ) as $slug ) {
+			if ( isset( $links[ $slug ] ) ) {
+				$sorted[ $slug ] = $links[ $slug ];
+				unset( $links[ $slug ] );
+			}
+		}
+
+		return $sorted + $links;
 	}
 
 	public function sanitize_social_preview_mode( $value ) {
@@ -732,11 +811,28 @@ class V4V_Music_Link_Resolver_Pro {
 						</td>
 					</tr>
 					<tr>
+						<th scope="row">
+							<?php esc_html_e( 'Release header', 'v4v-musiclink-pro' ); ?>
+						</th>
+						<td>
+							<?php $show_header_value = get_option( 'v4v_musiclink_pro_show_header', true ) ? '1' : '0'; ?>
+							<select id="v4v_musiclink_pro_show_header" name="v4v_musiclink_pro_show_header">
+								<option value="1" <?php selected( $show_header_value, '1' ); ?>><?php esc_html_e( 'Show', 'v4v-musiclink-pro' ); ?></option>
+								<option value="0" <?php selected( $show_header_value, '0' ); ?>><?php esc_html_e( 'Hide', 'v4v-musiclink-pro' ); ?></option>
+							</select>
+							<label for="v4v_musiclink_pro_show_header"><?php esc_html_e( ' the release title, artist and artwork above the music app buttons', 'v4v-musiclink-pro' ); ?></label>
+							<p class="description">
+								<?php esc_html_e( 'This is the site-wide default for every [musiclink_pro] shortcode. It can be overridden per placement with the optional header attribute: header="false" hides the header for that instance, header="true" shows it, regardless of this setting.', 'v4v-musiclink-pro' ); ?>
+							</p>
+						</td>
+					</tr>
+					<tr>
 						<th scope="row"><?php esc_html_e( 'Music apps', 'v4v-musiclink-pro' ); ?></th>
 						<td>
 							<table class="widefat" style="max-width:760px;">
 								<thead>
 									<tr>
+										<th style="width:100px;"><?php esc_html_e( 'Order', 'v4v-musiclink-pro' ); ?></th>
 										<th style="width:60px;"><?php esc_html_e( 'Active', 'v4v-musiclink-pro' ); ?></th>
 										<th><?php esc_html_e( 'App', 'v4v-musiclink-pro' ); ?></th>
 										<th style="width:60px;"><?php esc_html_e( 'Icon', 'v4v-musiclink-pro' ); ?></th>
@@ -744,7 +840,8 @@ class V4V_Music_Link_Resolver_Pro {
 									</tr>
 								</thead>
 								<tbody>
-									<?php foreach ( $this->app_registry() as $slug => $app ) : ?>
+									<?php $position = 0; ?>
+									<?php foreach ( $this->ordered_app_registry() as $slug => $app ) : ?>
 										<?php
 										$config        = $this->get_app_config( $slug );
 										$preview        = $this->get_app_icon( $slug, $app['domain'] );
@@ -752,6 +849,17 @@ class V4V_Music_Link_Resolver_Pro {
 										$field_name     = 'v4v_musiclink_pro_apps[' . $slug . ']';
 										?>
 										<tr class="v4v-app-row">
+											<td style="width:100px; white-space:nowrap;">
+												<input
+													type="hidden"
+													class="v4v-app-order-input"
+													name="<?php echo esc_attr( $field_name ); ?>[order]"
+													value="<?php echo esc_attr( $position ); ?>"
+												/>
+												<span class="v4v-app-order-position"><?php echo esc_html( $position + 1 ); ?></span>
+												<button type="button" class="button button-small v4v-app-move-up" title="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclink-pro' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclink-pro' ), $app['label'] ) ); ?>">&#8593;</button>
+												<button type="button" class="button button-small v4v-app-move-down" title="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclink-pro' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclink-pro' ), $app['label'] ) ); ?>">&#8595;</button>
+											</td>
 											<td>
 												<input
 													type="checkbox"
@@ -784,11 +892,12 @@ class V4V_Music_Link_Resolver_Pro {
 												<span class="v4v-app-icon-warning" style="color:#a00; display:none;"><?php esc_html_e( 'Image could not be loaded from that URL.', 'v4v-musiclink-pro' ); ?></span>
 											</td>
 										</tr>
+									<?php $position++; ?>
 									<?php endforeach; ?>
 								</tbody>
 							</table>
 							<p class="description">
-								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [musiclink_pro] shortcode is used. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below.', 'v4v-musiclink-pro' ); ?>
+								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [musiclink_pro] shortcode is used. Use the arrows in the "Order" column to set the order the buttons appear in on the front end, then click "Save Changes" below to apply it. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below.', 'v4v-musiclink-pro' ); ?>
 							</p>
 							<script>
 							(function () {
@@ -825,27 +934,34 @@ class V4V_Music_Link_Resolver_Pro {
 								} );
 							} );
 							})();
+							(function () {
+								function v4vRenumberApps() {
+									var rows = document.querySelectorAll( '.v4v-app-row' );
+									rows.forEach( function ( row, index ) {
+										row.querySelector( '.v4v-app-order-input' ).value = index;
+										row.querySelector( '.v4v-app-order-position' ).textContent = index + 1;
+										row.querySelector( '.v4v-app-move-up' ).disabled = ( 0 === index );
+										row.querySelector( '.v4v-app-move-down' ).disabled = ( index === rows.length - 1 );
+									} );
+								}
+
+								document.querySelectorAll( '.v4v-app-move-up, .v4v-app-move-down' ).forEach( function ( button ) {
+									button.addEventListener( 'click', function () {
+										var row = button.closest( '.v4v-app-row' );
+
+										if ( button.classList.contains( 'v4v-app-move-up' ) && row.previousElementSibling ) {
+											row.parentNode.insertBefore( row, row.previousElementSibling );
+										} else if ( button.classList.contains( 'v4v-app-move-down' ) && row.nextElementSibling ) {
+											row.parentNode.insertBefore( row.nextElementSibling, row );
+										}
+
+										v4vRenumberApps();
+									} );
+								} );
+
+								v4vRenumberApps();
+							})();
 							</script>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">
-							<?php esc_html_e( 'Release header', 'v4v-musiclink-pro' ); ?>
-						</th>
-						<td>
-							<input type="hidden" name="v4v_musiclink_pro_show_header" value="0" />
-							<label>
-								<input
-								type="checkbox"
-								name="v4v_musiclink_pro_show_header"
-								value="1"
-								<?php checked( get_option( 'v4v_musiclink_pro_show_header', true ) ); ?>
-								/>
-								<?php esc_html_e( 'Show the release title, artist and artwork above the music app buttons', 'v4v-musiclink-pro' ); ?>
-							</label>
-							<p class="description">
-								<?php esc_html_e( 'This is the site-wide default for every [musiclink_pro] shortcode. It can be overridden per placement with the optional header attribute: header="false" hides the header for that instance, header="true" shows it, regardless of this setting.', 'v4v-musiclink-pro' ); ?>
-							</p>
 						</td>
 					</tr>
 					<tr>
@@ -883,7 +999,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.5', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.6', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
@@ -1390,6 +1506,10 @@ JS;
 				'icon_url' => $this->get_app_icon( 'fountain', 'fountain.fm' ),
 			);
 		}
+
+		// Buttons appear in the admin-configured order, not the order
+		// the links happen to be assembled in above.
+		$links = $this->sort_links_by_app_order( $links );
 
 		return $this->render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header );
 	}
