@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.12] - 2026-09-23
+
+### Added
+- **Search results are paginated instead of stopping at 8**: the search box fetched Music Index's default batch, resolved the first 8 hits (`SEARCH_RESULT_LIMIT`) and discarded the rest, so only the top 8 were ever reachable - `q=love` alone has 885 unique results. Results now come 8 per page behind a «‹ Previous · Page N · Results X–Y · Next ›» control (the control hides when there is only one page). Ordering is exactly Music Index's relevance order - nothing is re-sorted, grouped or type-filtered.
+
+### Changed
+- **Search hits are accumulated per query behind a transient, and deeper pages chain Music Index's cursor**: `/v1/search` caps `limit` at 100 and exposes no offset or total (`page`/`offset`/`per_page` are silently ignored), so results beyond the first batch are reached by chaining opaque `pagination.cursor` values. The accumulated list only ever *appends*, so a hit keeps a stable index for the cache's lifetime - page boundaries never shift, navigating backwards costs no HTTP call, and detail lookups stay cached. Each request chains at most `SEARCH_MAX_BATCHES` (3) batches, and the cursor is kept so the next request continues from where it stopped. Because the endpoint never reports a total, the UI shows the page and its item range rather than "X of Y".
+- **Duplicates are now removed across batches**: Music Index repeats hits (`q=love` returns 1358 rows for 885 unique; 56 rows for 30 unique on `q=Kurtisdrums`), so de-duplication is applied while accumulating - otherwise the same release would appear on two different pages. Keys are identity-based (`entity_type|entity_id|parent album guid`), never positional, so they can't disturb page boundaries. A track hit with no parent `feed_guid` is unresolvable and is dropped at the same point.
+- **A no-match query can no longer chain forever**: Music Index returns **zero rows with `has_more: true`** for a query that matches nothing (verified live), so an empty batch now terminates the chain regardless of what the response claims; a cursor that comes back unchanged does the same. Cached 1 hour under `mi_search_hits_v2_`.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.11] - 2026-09-23
 
 ### Fixed

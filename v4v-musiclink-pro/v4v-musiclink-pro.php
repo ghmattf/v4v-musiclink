@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.11
+ * Version: 1.20.12
  * Author: Matt Finlay
  *
  * USAGE:
@@ -117,7 +117,16 @@ class V4V_Music_Link_Resolver_Pro {
 	// Bump whenever the shape of what gets cached changes, so old
 	// transients (with different/missing fields) are never served stale.
 	const CACHE_SCHEMA_VERSION = 4;
-	const SEARCH_RESULT_LIMIT  = 8;
+
+	// Search pagination. Music Index caps `limit` at 100 and pages the rest
+	// behind opaque cursors, so a batch is at most SEARCH_BATCH_LIMIT rows and
+	// deeper results are reached by chaining. SEARCH_MAX_BATCHES bounds how
+	// many upstream calls a single AJAX request may trigger.
+	const SEARCH_PER_PAGE        = 8;
+	const SEARCH_BATCH_LIMIT     = 100;
+	const SEARCH_MAX_BATCHES     = 3;
+	const SEARCH_CACHE_SCHEMA    = 2;
+	const SEARCH_CACHE_TTL       = HOUR_IN_SECONDS;
 
 	public function __construct() {
 		add_shortcode( 'musiclink_pro', array( $this, 'render' ) );
@@ -1081,7 +1090,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.11', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.12', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
@@ -1091,6 +1100,12 @@ class V4V_Music_Link_Resolver_Pro {
 				'noResults'   => __( 'No results found.', 'v4v-musiclink-pro' ),
 				'searchError' => __( 'Search failed - please try again.', 'v4v-musiclink-pro' ),
 				'copied'      => __( 'Link copied!', 'v4v-musiclink-pro' ),
+				'prevPage'    => __( '‹ Previous', 'v4v-musiclink-pro' ),
+				'nextPage'    => __( 'Next ›', 'v4v-musiclink-pro' ),
+				/* translators: 1: current page number. */
+				'pageLabel'   => __( 'Page %1$d', 'v4v-musiclink-pro' ),
+				/* translators: 1: first result index on this page, 2: last result index on this page. */
+				'rangeLabel'  => __( 'Results %1$d–%2$d', 'v4v-musiclink-pro' ),
 			),
 		) );
 		wp_add_inline_script( 'v4v-musiclink-pro', $this->inline_js() );
@@ -1196,6 +1211,19 @@ class V4V_Music_Link_Resolver_Pro {
 			.v4v-musiclink-pro-result button:hover { background-color: #f5f5f5; }
 			.v4v-musiclink-pro-result-title { font-weight: 600; }
 			.v4v-musiclink-pro-result-subtitle { color: #666; font-size: 0.9em; }
+
+			.v4v-musiclink-pro-pager {
+				display: flex; align-items: center; gap: 0.6em;
+				margin-top: 0.9em;
+			}
+			.v4v-musiclink-pro-pager[hidden] { display: none; }
+			.v4v-musiclink-pro-pager-btn {
+				padding: 0.45em 0.9em; border: 1px solid #ddd; border-radius: 6px;
+				background: #fff; cursor: pointer; font: inherit; font-size: 0.95em;
+			}
+			.v4v-musiclink-pro-pager-btn:hover:not(:disabled) { background-color: #f5f5f5; }
+			.v4v-musiclink-pro-pager-btn:disabled { opacity: 0.45; cursor: default; }
+			.v4v-musiclink-pro-pager-label { color: #666; font-size: 0.9em; }
 		';
 	}
 
@@ -1208,28 +1236,86 @@ class V4V_Music_Link_Resolver_Pro {
 				var button  = root.querySelector(".v4v-musiclink-pro-search-btn");
 				var status  = root.querySelector(".v4v-musiclink-pro-search-status");
 				var results = root.querySelector(".v4v-musiclink-pro-results");
+				var pager      = root.querySelector(".v4v-musiclink-pro-pager");
+				var pagerPrev  = root.querySelector(".v4v-musiclink-pro-pager-prev");
+				var pagerNext  = root.querySelector(".v4v-musiclink-pro-pager-next");
+				var pagerLabel = root.querySelector(".v4v-musiclink-pro-pager-label");
 
-				function runSearch() {
+				// The server picks up where it left off, so this is just the
+				// page we last asked for - not a result count (the total is
+				// unknown while Music Index still has more batches behind its
+				// cursor).
+				var currentPage = 1;
+				var currentHasMore = false;
+				var currentPerPage = 8;
+
+				pagerPrev.textContent = v4vMusicLinkPro.i18n.prevPage;
+				pagerNext.textContent = v4vMusicLinkPro.i18n.nextPage;
+
+				// "%1$d"-style placeholders, so translators can reorder them.
+				function fmt(template) {
+					var values = Array.prototype.slice.call(arguments, 1);
+					var i = 0;
+					return template.replace(/%(\d+\$)?d/g, function (m, ord) {
+						var idx = ord ? parseInt(ord, 10) - 1 : i;
+						if (!ord) { i++; }
+						return String(values[idx]);
+					});
+				}
+
+				function renderPager(count) {
+					var show = currentPage > 1 || currentHasMore;
+					pager.hidden = !show;
+					if (!show) { return; }
+
+					pagerPrev.disabled = currentPage <= 1;
+					pagerNext.disabled = !currentHasMore;
+
+					var start = (currentPage - 1) * currentPerPage + 1;
+					pagerLabel.textContent = fmt(v4vMusicLinkPro.i18n.pageLabel, currentPage);
+					if (count > 0) {
+						// An empty page past the end has no meaningful range.
+						pagerLabel.textContent += " · "
+							+ fmt(v4vMusicLinkPro.i18n.rangeLabel, start, start + count - 1);
+					}
+				}
+
+				function runSearch(page) {
 					var q = input.value.trim();
 					if (!q) { return; }
 
+					currentPage = page;
 					results.innerHTML = "";
+					pager.hidden = true;
 					status.textContent = v4vMusicLinkPro.i18n.searching;
 
 					var body = new URLSearchParams();
 					body.append("action", "v4v_musiclink_pro_search");
 					body.append("nonce", v4vMusicLinkPro.nonce);
 					body.append("q", q);
+					body.append("page", String(page));
 
 					fetch(v4vMusicLinkPro.ajaxUrl, { method: "POST", body: body })
 						.then(function (r) { return r.json(); })
 						.then(function (res) {
-							if (!res.success || !res.data || !res.data.length) {
+							if (!res.success || !res.data || !res.data.results) {
+								status.textContent = v4vMusicLinkPro.i18n.searchError;
+								return;
+							}
+							var data = res.data;
+							var items = data.results;
+
+							currentPage   = data.page;
+							currentHasMore = !!data.has_more;
+							currentPerPage = data.per_page || 8;
+
+							if (!items.length) {
 								status.textContent = v4vMusicLinkPro.i18n.noResults;
+								renderPager(0);
 								return;
 							}
 							status.textContent = "";
-							res.data.forEach(function (item) {
+							items.forEach(function (item) {
 								var li = document.createElement("li");
 								li.className = "v4v-musiclink-pro-result";
 
@@ -1258,15 +1344,23 @@ class V4V_Music_Link_Resolver_Pro {
 								li.appendChild(btn);
 								results.appendChild(li);
 							});
+							renderPager(items.length);
 						})
 						.catch(function () {
 							status.textContent = v4vMusicLinkPro.i18n.searchError;
 						});
 				}
 
-				button.addEventListener("click", runSearch);
+				pagerPrev.addEventListener("click", function () {
+					if (currentPage > 1) { runSearch(currentPage - 1); }
+				});
+				pagerNext.addEventListener("click", function () {
+					if (currentHasMore) { runSearch(currentPage + 1); }
+				});
+
+				button.addEventListener("click", function () { runSearch(1); });
 				input.addEventListener("keydown", function (e) {
-					if (e.key === "Enter") { runSearch(); }
+					if (e.key === "Enter") { runSearch(1); }
 				});
 			}
 
@@ -1639,9 +1733,114 @@ JS;
 			<?php endif; ?>
 			<p class="v4v-musiclink-pro-search-status"></p>
 			<ul class="v4v-musiclink-pro-results"></ul>
+			<nav class="v4v-musiclink-pro-pager" hidden>
+				<button type="button" class="v4v-musiclink-pro-pager-btn v4v-musiclink-pro-pager-prev"></button>
+				<span class="v4v-musiclink-pro-pager-label"></span>
+				<button type="button" class="v4v-musiclink-pro-pager-btn v4v-musiclink-pro-pager-next"></button>
+			</nav>
 		</div>
 		<?php
 		return ob_get_clean();
+	}
+
+	/**
+	 * Stable key for one search hit, used to drop the duplicates Music
+	 * Index's /search sometimes repeats within and across batches. Must be
+	 * based only on the hit's own identity - never on its position - or
+	 * page boundaries would shift between requests.
+	 */
+	private function search_hit_key( $hit ) {
+		if ( empty( $hit['entity_type'] ) || empty( $hit['entity_id'] ) ) {
+			return '';
+		}
+
+		// Track-type hits carry a separate feed_guid (their parent album)
+		// and need it to fetch details. Feed/album-type hits have no
+		// feed_guid at all - entity_id IS the album's own guid.
+		$album_guid = ( 'track' === $hit['entity_type'] ) ? ( $hit['feed_guid'] ?? '' ) : $hit['entity_id'];
+		if ( 'track' === $hit['entity_type'] && '' === $album_guid ) {
+			return ''; // Can't resolve a track without knowing its album.
+		}
+
+		return $hit['entity_type'] . '|' . $hit['entity_id'] . '|' . $album_guid;
+	}
+
+	/**
+	 * Returns the accumulated, de-duplicated hits for a query in Music
+	 * Index's relevance order, fetching more cursor batches only when fewer
+	 * than $needed hits are already known.
+	 *
+	 * The accumulated list is stored in a per-query transient, so it only
+	 * ever grows by appending: a hit keeps the same index for the lifetime of
+	 * the cache, which is what makes page boundaries stable and lets the
+	 * browser walk backwards for free. Relevance order is exactly the order
+	 * Music Index returned - nothing is re-sorted here.
+	 *
+	 * @return array{hits: array, has_more: bool} De-duplicated hits, and
+	 *         whether a further batch is known to exist behind the cursor.
+	 */
+	private function mi_search_hits( $query, $needed ) {
+		$cache_key = 'mi_search_hits_v' . self::SEARCH_CACHE_SCHEMA . '_' . md5( $query );
+		$state     = get_transient( $cache_key );
+		if (
+			! is_array( $state )
+			|| ! isset( $state['hits'], $state['has_more'], $state['cursor'] )
+			|| ! is_array( $state['hits'] )
+		) {
+			$state = array(
+				'hits'     => array(),
+				'seen'     => array(),
+				'cursor'   => '',
+				'has_more' => true, // Assume more until a batch says otherwise.
+			);
+		}
+
+		$batches = 0;
+		while (
+			count( $state['hits'] ) < $needed
+			&& $state['has_more']
+			&& $batches < self::SEARCH_MAX_BATCHES
+		) {
+			$path = '/search?q=' . rawurlencode( $query ) . '&limit=' . self::SEARCH_BATCH_LIMIT;
+			if ( '' !== $state['cursor'] ) {
+				$path .= '&cursor=' . rawurlencode( $state['cursor'] );
+			}
+
+			$body   = $this->mi_api_get( $path );
+			$batches++;
+
+			if ( empty( $body['data'] ) || ! is_array( $body['data'] ) ) {
+				// An empty batch ends the chain even when the response still
+				// claims has_more - a no-match query returns zero rows with
+				// has_more=true, and trusting it would loop forever.
+				$state['has_more'] = false;
+				break;
+			}
+
+			foreach ( $body['data'] as $hit ) {
+				$key = $this->search_hit_key( $hit );
+				if ( '' === $key || isset( $state['seen'][ $key ] ) ) {
+					continue;
+				}
+				$state['seen'][ $key ] = true;
+				$state['hits'][]       = $hit;
+			}
+
+			$cursor  = (string) ( $body['pagination']['cursor'] ?? '' );
+			$has_more = ! empty( $body['pagination']['has_more'] ) && '' !== $cursor;
+			if ( '' === $cursor || $cursor === $state['cursor'] ) {
+				$has_more = false; // No progress possible, stop regardless.
+			}
+			$state['cursor']   = $cursor;
+			$state['has_more'] = $has_more;
+		}
+
+		set_transient( $cache_key, $state, self::SEARCH_CACHE_TTL );
+
+		return array(
+			'hits'     => $state['hits'],
+			'has_more' => $state['has_more'],
+		);
 	}
 
 	/**
@@ -1649,52 +1848,54 @@ JS;
 	 * endpoint, then resolves each hit's title/artist (search results only
 	 * contain guids, not display text) before returning results to the
 	 * browser.
+	 *
+	 * Results are paginated server-side in Music Index's relevance order.
+	 * Because the endpoint only offers opaque cursors (never an offset or a
+	 * total), a grand total cannot be reported - the response says whether
+	 * another page exists instead.
 	 */
 	public function ajax_search() {
 		check_ajax_referer( 'v4v_musiclink_pro_search', 'nonce' );
 
 		$query = isset( $_POST['q'] ) ? sanitize_text_field( wp_unslash( $_POST['q'] ) ) : '';
+		$page  = isset( $_POST['page'] ) ? absint( $_POST['page'] ) : 1;
+		$page  = max( 1, $page );
+		$per_page = self::SEARCH_PER_PAGE;
+
+		$payload = array(
+			'results'  => array(),
+			'page'     => $page,
+			'per_page' => $per_page,
+			'has_more' => false,
+		);
+
 		if ( '' === $query ) {
-			wp_send_json_success( array() );
+			wp_send_json_success( $payload );
 		}
 
-		$body = $this->mi_api_get( '/search?q=' . rawurlencode( $query ) );
-		if ( empty( $body['data'] ) || ! is_array( $body['data'] ) ) {
-			wp_send_json_success( array() );
-		}
+		$offset = ( $page - 1 ) * $per_page;
+		$search = $this->mi_search_hits( $query, $offset + $per_page );
+		$hits   = $search['hits'];
 
-		$results = array();
-		$seen    = array();
+		// De-duplicate again over just this page as a cheap guard: a stale
+		// cache written by an older schema could otherwise leak repeats.
+		$seen = array();
 
-		foreach ( $body['data'] as $hit ) {
-			if ( count( $results ) >= self::SEARCH_RESULT_LIMIT ) {
-				break;
-			}
-			if ( empty( $hit['entity_type'] ) || empty( $hit['entity_id'] ) ) {
+		foreach ( array_slice( $hits, $offset, $per_page ) as $hit ) {
+			$key = $this->search_hit_key( $hit );
+			if ( '' === $key || isset( $seen[ $key ] ) ) {
 				continue;
 			}
+			$seen[ $key ] = true;
 
-			// Track-type hits carry a separate feed_guid (their parent album)
-			// and need it to fetch details. Feed/album-type hits have no
-			// feed_guid at all - entity_id IS the album's own guid.
-			$is_track = ( 'track' === $hit['entity_type'] );
-			if ( $is_track && empty( $hit['feed_guid'] ) ) {
-				continue; // Can't resolve a track without knowing its album.
-			}
-			$album_guid_for_hit = $is_track ? $hit['feed_guid'] : $hit['entity_id'];
+			$album_guid_for_hit = ( 'track' === $hit['entity_type'] ) ? $hit['feed_guid'] : $hit['entity_id'];
 
-			$dedupe_key = $hit['entity_type'] . '|' . $hit['entity_id'] . '|' . $album_guid_for_hit;
-			if ( isset( $seen[ $dedupe_key ] ) ) {
-				continue; // Music Index's search sometimes repeats the same hit.
-			}
-			$seen[ $dedupe_key ] = true;
-
-			if ( $is_track ) {
+			if ( 'track' === $hit['entity_type'] ) {
 				$track_data = $this->mi_get_track( $album_guid_for_hit, $hit['entity_id'] );
 				if ( ! $track_data ) {
 					continue;
 				}
-				$results[] = array(
+				$payload['results'][] = array(
 					'album_guid' => $album_guid_for_hit,
 					'track_guid' => $hit['entity_id'],
 					'title'      => $track_data['title'],
@@ -1712,7 +1913,7 @@ JS;
 				if ( ! $feed_data ) {
 					continue;
 				}
-				$results[] = array(
+				$payload['results'][] = array(
 					'album_guid' => $album_guid_for_hit,
 					'track_guid' => null,
 					'title'      => $feed_data['title'],
@@ -1723,7 +1924,14 @@ JS;
 			}
 		}
 
-		wp_send_json_success( $results );
+		// Another page exists if we already hold hits beyond this one, or if
+		// the cursor says another batch is fetchable. An empty page is always
+		// the last one, so a request past the end can't offer "Next".
+		$payload['has_more'] = ( ! $payload['results'] )
+			? false
+			: ( isset( $hits[ $offset + $per_page ] ) || $search['has_more'] );
+
+		wp_send_json_success( $payload );
 	}
 
 	/**
