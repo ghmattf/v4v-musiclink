@@ -3,6 +3,14 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.13] - 2026-09-23
+
+### Added
+- **A "Clear log" button on the View Log tab**: the view log could only ever grow - the only way to empty `{wp_prefix}v4v_musiclink_pro_log` was to drop the table by hand. The button now empties it through an `admin-post.php` action guarded by a nonce (so a crafted link or a bare `<img>` hit cannot wipe it) plus a `manage_options` capability check, asks for confirmation via `confirm()` first, and returns to the tab with a "View log cleared." notice. It only appears while the log actually has rows. Rows are deleted with `DELETE` rather than `TRUNCATE` so it also works on restricted WordPress database users.
+
+### Changed
+- **Releases hardcoded into a shortcode attribute are no longer logged as views**: `log_view()` fired on *every* successful render, including placements where the guid came from `[musiclink_pro album="…"]` in post content - so a single embedded button wrote a row on each render of that post (page views, feeds, previews and crawler hits alike) and the reports/View Log counted those as usage of the shareable `/musiclink?album=…&track=…` link. Only URL-driven views are logged now; whether a guid came from the URL is decided *before* the two sources are merged, since afterwards the value no longer says where it came from (when both are present the shortcode attribute supplies the render, and the view is skipped). What a row contains is unchanged - date plus the three titles Music Index returns. The raw `album`/`track` guids have never been stored, and no raw request params are written to any log anywhere in this plugin; that guarantee is now stated in the plugin header, the README, and asserted by the test suite.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.12] - 2026-09-23
 
 ### Added

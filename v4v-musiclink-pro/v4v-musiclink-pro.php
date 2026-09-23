@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.12
+ * Version: 1.20.13
  * Author: Matt Finlay
  *
  * USAGE:
@@ -87,13 +87,19 @@
  * list while the site default is the opposite. Unrecognized header
  * values fall back to the admin setting.
  *
- * VIEW LOGGING: every time a guid successfully resolves to a real release,
- * one row (date, artist, album, track) is logged to a dedicated database
- * table, `{wp_prefix}v4v_musiclink_pro_log` - created automatically on first
- * load after this version is installed. View the latest entries and run
- * aggregated reports from the "View Log" and "Reports" tabs under
- * Settings > V4V MusicLink Pro. Logged unconditionally per view, not
- * deduplicated per visitor/session.
+ * VIEW LOGGING: every time a guid supplied in the URL successfully resolves
+ * to a real release, one row (date, artist, album, track) is logged to a
+ * dedicated database table, `{wp_prefix}v4v_musiclink_pro_log` - created
+ * automatically on first load after this version is installed. The
+ * album/track guids themselves are never stored: the three text columns
+ * hold titles resolved from Music Index, and nothing else is written
+ * anywhere (no error log, no debug file). Releases hardcoded into a
+ * shortcode attribute are not logged at all - they would otherwise add a
+ * row on every render of that post, feeds and crawlers included. Logged
+ * unconditionally per URL-driven view, not deduplicated per
+ * visitor/session. View the latest entries and run aggregated reports
+ * from the "View Log" and "Reports" tabs under Settings > V4V MusicLink
+ * Pro; the View Log tab can also clear the table.
  *
  * NOT FOUND HANDLING: if a guid is validly formatted but Music Index has no
  * matching release, the page falls back to the search view (same as no
@@ -135,6 +141,7 @@ class V4V_Music_Link_Resolver_Pro {
 		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_search', array( $this, 'ajax_search' ) );
 		add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
+		add_action( 'admin_post_v4v_musiclink_pro_clear_log', array( $this, 'handle_clear_log' ) );
 
 		$mode = $this->get_social_preview_mode();
 		if ( 'off' === $mode ) {
@@ -220,8 +227,12 @@ class V4V_Music_Link_Resolver_Pro {
 	/**
 	 * Logs one row per successfully-resolved page view (a guid that
 	 * actually matched something in Music Index) - date, artist, album,
-	 * and track (blank when it's an album-only view). Logged unconditionally
-	 * on every successful view, not deduplicated per visitor/session.
+	 * and track (blank when it's an album-only view). Only titles resolved
+	 * from Music Index are stored; the album/track guids that drove the
+	 * view never are. Called for URL-driven views only - render() skips it
+	 * when the guid came from a hardcoded shortcode attribute. Logged
+	 * unconditionally on every qualifying view, not deduplicated per
+	 * visitor/session.
 	 */
 	private function log_view( $artist, $album_title, $track_title ) {
 		global $wpdb;
@@ -628,7 +639,21 @@ class V4V_Music_Link_Resolver_Pro {
 		$table_name = $wpdb->prefix . 'v4v_musiclink_pro_log';
 		$rows       = $wpdb->get_results( "SELECT logged_at, artist, album, track FROM {$table_name} ORDER BY id DESC LIMIT 100" );
 		$total      = $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name}" );
+
+		// admin-post.php action for emptying the table, nonce-bound so a
+		// crafted link (or an <img> hit) cannot wipe the log.
+		$clear_url = wp_nonce_url(
+			add_query_arg( array( 'action' => 'v4v_musiclink_pro_clear_log' ), admin_url( 'admin-post.php' ) ),
+			'v4v_musiclink_pro_clear_log'
+		);
+
+		$just_cleared = isset( $_GET['cleared'] ) && '1' === sanitize_text_field( wp_unslash( $_GET['cleared'] ) );
 		?>
+		<?php if ( $just_cleared ) : ?>
+			<div class="notice notice-success is-dismissible">
+				<p><?php esc_html_e( 'View log cleared.', 'v4v-musiclink-pro' ); ?></p>
+			</div>
+		<?php endif; ?>
 		<p>
 			<?php
 			printf(
@@ -638,6 +663,17 @@ class V4V_Music_Link_Resolver_Pro {
 			);
 			?>
 		</p>
+		<?php if ( (int) $total > 0 ) : ?>
+			<p>
+				<a
+					class="button button-secondary"
+					href="<?php echo esc_url( $clear_url ); ?>"
+					onclick="return confirm('<?php echo esc_js( __( 'Clear the entire view log? This cannot be undone.', 'v4v-musiclink-pro' ) ); ?>');"
+				>
+					<?php esc_html_e( 'Clear log', 'v4v-musiclink-pro' ); ?>
+				</a>
+			</p>
+		<?php endif; ?>
 		<table class="widefat striped">
 			<thead>
 				<tr>
@@ -663,6 +699,39 @@ class V4V_Music_Link_Resolver_Pro {
 			</tbody>
 		</table>
 		<?php
+	}
+
+	/**
+	 * admin-post.php handler behind the "Clear log" button: empties the
+	 * whole view table and returns to the tab with a confirmation notice.
+	 * Nonce and capability are both checked before anything is written, so
+	 * neither a forged link nor a logged-in non-admin can wipe it.
+	 */
+	public function handle_clear_log() {
+		check_admin_referer( 'v4v_musiclink_pro_clear_log' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You are not allowed to clear the view log.', 'v4v-musiclink-pro' ) );
+		}
+
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'v4v_musiclink_pro_log';
+
+		// DELETE rather than TRUNCATE: needs only the DELETE privilege, so
+		// it also works on restricted WordPress database users.
+		$wpdb->query( "DELETE FROM {$table_name}" );
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'    => 'v4v-musiclink-pro',
+					'tab'     => 'log',
+					'cleared' => '1',
+				),
+				admin_url( 'options-general.php' )
+			)
+		);
+		exit;
 	}
 
 	public function register_settings() {
@@ -1090,7 +1159,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.12', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.13', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
@@ -1563,6 +1632,13 @@ JS;
 			'header' => '',
 		), $atts, 'musiclink_pro' );
 
+		// Did either guid arrive as a hardcoded shortcode attribute (a
+		// release embedded in post content) rather than from the URL's
+		// query string? Decided here, before the two sources are merged
+		// below, because afterwards the value no longer says where it came
+		// from. Drives whether the view is logged - see log_view() call.
+		$from_shortcode = ! empty( $atts['album'] ) || ! empty( $atts['track'] );
+
 		// Explicit shortcode attributes (for hardcoding a specific release
 		// inline in post content) take priority over the URL's query string
 		// (used by the shareable /musiclink page).
@@ -1595,7 +1671,14 @@ JS;
 			return $this->render_search_ui( __( 'Album/Song not found', 'v4v-musiclink-pro' ) );
 		}
 
-		$this->log_view( $artist, $album_title, $track_title );
+		// Only URL-driven views are logged: a release hardcoded into a
+		// shortcode attribute belongs to the post, not to a shared link, so
+		// logging it would write a row on *every* render of that post -
+		// page views, feeds, previews and crawler hits alike - and bury the
+		// numbers the reports are meant to show.
+		if ( ! $from_shortcode ) {
+			$this->log_view( $artist, $album_title, $track_title );
+		}
 
 		$links = array();
 
