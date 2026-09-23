@@ -3,6 +3,13 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.2] - 2026-09-23
+
+### Added
+- **New admin setting "Release header"** (Settings → V4V MusicLink): site-wide checkbox controlling whether the release header (title, artist, artwork) shows above the music app buttons. Default: shown (unchanged behaviour).
+- **New optional shortcode attribute `header="true|false"`**: overrides the admin setting per placement, e.g. `[musiclink album="…" header="false"]` hides the header for that instance. Accepted values: `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (case-insensitive); unrecognized or absent values fall back to the admin setting.
+- The "Missing parameter(s)" usage message now includes a `header` example.
+
 ## Resolver (v4v-musiclink) — [1.22.1] - 2026-09-23
 
 ### Changed
