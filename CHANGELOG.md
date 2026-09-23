@@ -3,6 +3,14 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.7] - 2026-09-23
+
+### Added
+- **Version number on the settings page** (Settings → V4V MusicLink Pro): the heading now reads "V4V MusicLink Pro Settings  Version 1.20.7", in small `description` styling next to the title, and appears above the tab bar so it shows on the Settings / View Log / Reports tabs alike. The version is read from the plugin file header at render time via `get_file_data()`, so `bump-version.sh`'s two maintained spots remain the only copies.
+
+### Fixed
+- **Settings page heading mislabelled**: it read "V4V MusicLink Settings" (the standard plugin's title) instead of "V4V MusicLink Pro Settings". The sidebar menu title was already correct, so menu and page header now match.
+
 ## Resolver (v4v-musiclink) — [1.22.4] - 2026-09-23
 
 ### Added

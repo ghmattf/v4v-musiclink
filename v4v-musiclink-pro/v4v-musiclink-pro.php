@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.6
+ * Version: 1.20.7
  * Author: Matt Finlay
  *
  * USAGE:
@@ -750,6 +750,16 @@ class V4V_Music_Link_Resolver_Pro {
 		return get_option( 'v4v_musiclink_pro_social_preview_mode', 'plugin_only' );
 	}
 
+	/**
+	 * This plugin's version, read live from the file header above so the
+	 * "Version:" line remains the only copy bump-version.sh has to update.
+	 */
+	private function plugin_version() {
+		$version = get_file_data( __FILE__, array( 'Version' => 'Version' ), 'plugin' );
+
+		return isset( $version['Version'] ) ? $version['Version'] : '';
+	}
+
 	public function render_settings_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -761,7 +771,18 @@ class V4V_Music_Link_Resolver_Pro {
 		$mode = $this->get_social_preview_mode();
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'V4V MusicLink Settings', 'v4v-musiclink-pro' ); ?></h1>
+			<h1>
+				<?php esc_html_e( 'V4V MusicLink Pro Settings', 'v4v-musiclink-pro' ); ?>
+				<span class="description">
+					<?php
+					printf(
+						/* translators: %s: this plugin's version number. */
+						esc_html__( 'Version %s', 'v4v-musiclink-pro' ),
+						esc_html( $this->plugin_version() )
+					);
+					?>
+				</span>
+			</h1>
 			<h2 class="nav-tab-wrapper">
 				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=settings' ) ); ?>" class="nav-tab <?php echo 'settings' === $active_tab ? 'nav-tab-active' : ''; ?>">
 					<?php esc_html_e( 'Settings', 'v4v-musiclink-pro' ); ?>
@@ -999,7 +1020,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.6', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.7', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
