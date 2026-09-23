@@ -56,3 +56,14 @@ Music metadata (titles, artist, artwork) comes from the [MusicIndex.org](https:/
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning/build workflow and [CHANGELOG.md](CHANGELOG.md) for release history.
+
+### PHP toolchain
+
+Linting and testing use a **portable PHP CLI kept in `php/`** — there is no system PHP dependency and `php` is generally **not** on `PATH`:
+
+```bash
+./php/install.sh   # first run / after a fresh clone (binary is gitignored)
+./php/php -l v4v-musiclink/v4v-musiclink.php
+```
+
+If you are an agent or new contributor: **before you can lint or run any PHP, run `./php/install.sh` once**, then always invoke `./php/php`. See the [PHP runtime section of CONTRIBUTING.md](CONTRIBUTING.md#php-runtime-required-for-linting-and-tests) for details.

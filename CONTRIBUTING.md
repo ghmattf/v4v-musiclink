@@ -1,5 +1,19 @@
 # Contributing / Build instructions
 
+## PHP runtime (required for linting and tests)
+
+**There is no system PHP dependency in this project, and you should not assume `php` is on `PATH`.** A portable, self-contained static PHP CLI lives in `php/`:
+
+```bash
+./php/php -v                                # check it works
+./php/php -l v4v-musiclink/v4v-musiclink.php
+./php/install.sh                            # install or repair it (idempotent)
+```
+
+- Always invoke it as **`./php/php`** (relative to the project root) — a bare `php` will usually fail with *command not found*.
+- The binary (`php/php`) and its tarball (`php/*.tar.gz`) are **gitignored download artifacts**, so a fresh clone starts without them. Run **`./php/install.sh`** first; it extracts from the local tarball if present, otherwise downloads the pinned version (PHP 8.5.8) for your OS/arch, and no-ops if PHP is already working.
+- Nothing else needs installing: no Composer, no `vendor/`, no Node. The plugins are plain PHP files loaded straight by WordPress.
+
 ## Version control
 
 This project is tracked with git. All changes must be committed; releases are marked with git tags.
@@ -46,7 +60,12 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
 ## Release checklist
 
 1. Make and test your changes.
-2. Lint: `php -l v4v-musiclink/v4v-musiclink.php && php -l v4v-musiclink-pro/v4v-musiclink-pro.php`
+2. Lint (uses the project's portable PHP — see [PHP runtime](#php-runtime-required-for-linting-and-tests)):
+
+   ```bash
+   ./php/install.sh   # only if ./php/php is missing
+   ./php/php -l v4v-musiclink/v4v-musiclink.php && ./php/php -l v4v-musiclink-pro/v4v-musiclink-pro.php
+   ```
 3. Bump version(s): `./bump-version.sh` (or `standard` / `pro`).
 4. Add a `CHANGELOG.md` entry for the new version(s).
 5. Commit: `git add -A && git commit -m "Release vX.Y.Z"`
