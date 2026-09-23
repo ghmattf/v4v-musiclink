@@ -3,6 +3,18 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.11] - 2026-09-23
+
+### Fixed
+- **Fountain.fm button 404'd whenever Fountain had filed the release as a podcast**: the URL path was hardcoded to `/track/` or `/album/` purely from whether the shortcode carried a `track=` guid, but Fountain serves the *same* opaque id under four different prefixes (`/track/`, `/album/`, `/episode/`, `/show/`) according to how **it** has categorised the release - so any release Fountain ingested as a podcast rendered its client-side "Oops! That page can't be found" screen (always HTTP 200, so the status code cannot detect it). Fountain's own search response already carries the answer as a `_type` field on every hit, and that field was being parsed then thrown away. The extractor now returns the type alongside the id, and a new `fountain_path_segment()` maps `TRACK→track`, `ALBUM→album`, `EPISODE→episode`, `SHOW→show`, falling back to the old guid-based guess only when Fountain omits a recognised type. No extra HTTP request is made. Example: `?album=69c634ad…&track=016b464c…` now emits `/episode/3xnUxg38mNApJVgv4hXa` and `/show/trSnfDZ8VBGzsh6hjoS4` instead of the 404ing `/track/…` and `/album/…`.
+- **Fountain resolution cache key bumped `fountain_id_pro_v4_` → `v5_`**: the cached value is now the whole hit (`id` + `type`) rather than the bare id, so entries written before this fix - which carry no type - are re-resolved once each rather than being served for their remaining 30-day lifetime.
+
+## Resolver (v4v-musiclink) — [1.22.8] - 2026-09-23
+
+### Fixed
+- **Fountain.fm button 404'd whenever Fountain had filed the release as a podcast**: the URL path was hardcoded to `/track/` or `/album/` purely from whether the shortcode carried a `track=` guid, but Fountain serves the *same* opaque id under four different prefixes (`/track/`, `/album/`, `/episode/`, `/show/`) according to how **it** has categorised the release - so any release Fountain ingested as a podcast rendered its client-side "Oops! That page can't be found" screen (always HTTP 200, so the status code cannot detect it). Fountain's own search response already carries the answer as a `_type` field on every hit, and that field was being parsed then thrown away. The extractor now returns the type alongside the id, and a new `fountain_path_segment()` maps `TRACK→track`, `ALBUM→album`, `EPISODE→episode`, `SHOW→show`, falling back to the old guid-based guess only when Fountain omits a recognised type. No extra HTTP request is made. Example: `?album=69c634ad…&track=016b464c…` now emits `/episode/3xnUxg38mNApJVgv4hXa` and `/show/trSnfDZ8VBGzsh6hjoS4` instead of the 404ing `/track/…` and `/album/…`.
+- **Fountain resolution cache key bumped `fountain_id_v4_` → `v5_`**: the cached value is now the whole hit (`id` + `type`) rather than the bare id, so entries written before this fix - which carry no type - are re-resolved once each rather than being served for their remaining 30-day lifetime.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.10] - 2026-09-23
 
 ### Security

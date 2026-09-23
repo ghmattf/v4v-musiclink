@@ -18,3 +18,4 @@ vendor/
 # WordPress debug artifacts
 wp-content/*-debug.log
 *.log
+tmp/

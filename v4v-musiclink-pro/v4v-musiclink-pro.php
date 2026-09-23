@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.10
+ * Version: 1.20.11
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1081,7 +1081,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.10', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.11', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
@@ -1569,17 +1569,16 @@ JS;
 			$fountain_has_track   = $has_track && $track_data;
 			$fountain_search_text = $fountain_has_track ? $track_data['title'] : ( $feed_data ? $feed_data['title'] : '' );
 			$fountain_target_guid = $fountain_has_track ? $track : $album;
-			$fountain_id          = $fountain_search_text ? $this->fountain_resolve( $fountain_target_guid, $fountain_search_text ) : null;
+			$fountain_hit         = $fountain_search_text ? $this->fountain_resolve( $fountain_target_guid, $fountain_search_text ) : null;
 
 			$fountain_url = 'https://fountain.fm';
-			if ( $fountain_id ) {
-				// This plugin only ever deals with medium="music" content,
-				// and Fountain uses distinct paths for music vs. regular
-				// podcasts: /album/ + /track/ here, vs. /show/ + /episode/
-				// for podcasts.
-				$fountain_url = $fountain_has_track
-					? 'https://fountain.fm/track/' . rawurlencode( $fountain_id )
-					: 'https://fountain.fm/album/' . rawurlencode( $fountain_id );
+			if ( $fountain_hit ) {
+				// The path prefix comes from Fountain's own _type on the
+				// matched hit - see fountain_path_segment().
+				$fountain_url = 'https://fountain.fm/'
+					. $this->fountain_path_segment( $fountain_hit, $fountain_has_track )
+					. '/'
+					. rawurlencode( $fountain_hit['id'] );
 			}
 
 			$links['fountain'] = array(
@@ -1728,10 +1727,12 @@ JS;
 	}
 
 	/**
-	 * Resolves a guid to Fountain's opaque internal ID via their
-	 * unofficial Server Action search endpoint. Returns null on any
-	 * failure - missing config, network error, unexpected response shape,
-	 * or no matching hit - so the caller can fall back to a plain link.
+	 * Resolves a guid to Fountain's opaque internal ID plus the content
+	 * type Fountain filed it under, via their unofficial Server Action
+	 * search endpoint. Returns array( 'id' => ..., 'type' => ... ) or
+	 * null on any failure - missing config, network error, unexpected
+	 * response shape, or no matching hit - so the caller can fall back to
+	 * a plain link.
 	 *
 	 * Successes are cached for a long time (30 days) since a release's
 	 * Fountain ID never changes once assigned. Failures are cached briefly
@@ -1776,7 +1777,11 @@ JS;
 	 * pair, so a stale cached failure never survives a next-action change.
 	 */
 	private function fountain_try_resolve( $guid, $search_text, $next_action ) {
-		$cache_key = 'fountain_id_pro_v4_' . md5( $guid . '|' . $next_action );
+		// v5: the cached value is now the whole hit (id + _type), not just
+		// the id, so the old v4 entries - which carry no type and would
+		// otherwise survive for up to 30 days - are deliberately left
+		// behind and re-resolved once each.
+		$cache_key = 'fountain_id_pro_v5_' . md5( $guid . '|' . $next_action );
 		$cached    = get_transient( $cache_key );
 		if ( false !== $cached ) {
 			return $cached ? $cached : null;
@@ -1813,15 +1818,15 @@ JS;
 			return null;
 		}
 
-		$fountain_id = $this->extract_fountain_hit_id( wp_remote_retrieve_body( $response ), $guid );
+		$hit = $this->extract_fountain_hit( wp_remote_retrieve_body( $response ), $guid );
 
-		if ( ! $fountain_id ) {
+		if ( ! $hit ) {
 			set_transient( $cache_key, '', self::FAIL_CACHE_TTL );
 			return null;
 		}
 
-		set_transient( $cache_key, $fountain_id, 30 * DAY_IN_SECONDS );
-		return $fountain_id;
+		set_transient( $cache_key, $hit, 30 * DAY_IN_SECONDS );
+		return $hit;
 	}
 
 	/**
@@ -1910,8 +1915,12 @@ JS;
 
 	/**
 	 * Parses Fountain's React Server Components wire format looking for
-	 * the chunk containing a "hits" array, then returns the _id of
-	 * whichever hit's _guid matches ours.
+	 * the chunk containing a "hits" array, then returns the _id AND _type
+	 * of whichever hit's _guid matches ours, as array( 'id' => ..., 'type'
+	 * => ... ). The _type is essential: Fountain serves a different path
+	 * prefix per type (see fountain_path_segment()), and guessing it from
+	 * the shortcode's own attributes 404s whenever Fountain has filed the
+	 * release under the other category.
 	 *
 	 * IMPORTANT: this chunk is NOT reliably at the start of its own line -
 	 * confirmed via live testing that it can be glued directly onto the
@@ -1923,7 +1932,7 @@ JS;
 	 * "N:{"hits":" marker anywhere in the body (no line-start assumption)
 	 * and takes everything from there to the end as the JSON payload.
 	 */
-	private function extract_fountain_hit_id( $raw_body, $target_guid ) {
+	private function extract_fountain_hit( $raw_body, $target_guid ) {
 		if ( ! preg_match( '/\d+:(\{"hits":.*)/s', (string) $raw_body, $matches ) ) {
 			return null;
 		}
@@ -1933,10 +1942,49 @@ JS;
 		}
 		foreach ( $decoded['hits'] as $hit ) {
 			if ( isset( $hit['_guid'], $hit['_id'] ) && $hit['_guid'] === $target_guid ) {
-				return $hit['_id'];
+				return array(
+					'id'   => $hit['_id'],
+					'type' => isset( $hit['_type'] ) ? (string) $hit['_type'] : '',
+				);
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The fountain.fm path prefix for a resolved hit.
+	 *
+	 * Fountain serves the SAME opaque id under four different prefixes,
+	 * chosen by how IT has filed the release - not by anything the
+	 * shortcode knows. Music ingested normally is TRACK/ALBUM, but a
+	 * release Fountain has categorised as a podcast is EPISODE/SHOW (this
+	 * happens to real music releases, e.g. an album Fountain ingested via
+	 * an RSS feed). The wrong prefix always renders Fountain's client-side
+	 * 404 - the response is still HTTP 200, so the status code cannot be
+	 * used to detect it.
+	 *
+	 * The type therefore decides the prefix. Only when Fountain omits a
+	 * type we recognise do we fall back to the historic guess - whether
+	 * the shortcode supplied a track guid - which preserves the previous
+	 * behaviour rather than degrading to a bare fountain.fm link.
+	 *
+	 * @param array $hit      Resolution result from extract_fountain_hit().
+	 * @param bool  $has_track Whether the shortcode carried track data (fallback only).
+	 */
+	private function fountain_path_segment( $hit, $has_track ) {
+		$by_type = array(
+			'TRACK'   => 'track',
+			'ALBUM'   => 'album',
+			'EPISODE' => 'episode',
+			'SHOW'    => 'show',
+		);
+
+		$type = isset( $hit['type'] ) ? strtoupper( (string) $hit['type'] ) : '';
+		if ( isset( $by_type[ $type ] ) ) {
+			return $by_type[ $type ];
+		}
+
+		return $has_track ? 'track' : 'album';
 	}
 
 	/**
