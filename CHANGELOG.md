@@ -3,6 +3,11 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.4] - 2026-09-23
+
+### Added
+- **Version number on the settings page** (Settings → V4V MusicLink): the heading now reads "V4V MusicLink Settings  Version 1.22.4", in small `description` styling next to the title. The version is read from the plugin file header at render time via `get_file_data()`, so `bump-version.sh`'s two maintained spots remain the only copies — the displayed number can never drift out of sync.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.6] - 2026-09-23
 
 ### Added

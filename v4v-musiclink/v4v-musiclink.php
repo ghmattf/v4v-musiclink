@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.3
+ * Version: 1.22.4
  * Author: Matt Finlay
  *
  * USAGE:
@@ -250,13 +250,34 @@ class V4V_Music_Link_Resolver {
 		return $sorted + $links;
 	}
 
+	/**
+	 * This plugin's version, read live from the file header above so the
+	 * "Version:" line remains the only copy bump-version.sh has to update.
+	 */
+	private function plugin_version() {
+		$version = get_file_data( __FILE__, array( 'Version' => 'Version' ), 'plugin' );
+
+		return isset( $version['Version'] ) ? $version['Version'] : '';
+	}
+
 	public function render_settings_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'V4V MusicLink Settings', 'v4v-musiclink' ); ?></h1>
+			<h1>
+				<?php esc_html_e( 'V4V MusicLink Settings', 'v4v-musiclink' ); ?>
+				<span class="description">
+					<?php
+					printf(
+						/* translators: %s: this plugin's version number. */
+						esc_html__( 'Version %s', 'v4v-musiclink' ),
+						esc_html( $this->plugin_version() )
+					);
+					?>
+				</span>
+			</h1>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'v4v_musiclink' ); ?>
 				<table class="form-table" role="presentation">
@@ -448,7 +469,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.3', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.4', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
