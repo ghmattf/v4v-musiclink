@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.6
+ * Version: 1.22.7
  * Author: Matt Finlay
  *
  * USAGE:
@@ -469,7 +469,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.6', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.7', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -864,9 +864,13 @@ JS;
 			return $cached ? $cached : null;
 		}
 
+		// redirection => 0: never let a remote host bounce an outbound
+		// request elsewhere - WP's default 5 hops would follow an open
+		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
 		$response = wp_remote_post( 'https://fountain.fm/', array(
-			'timeout' => 8,
-			'headers' => array(
+			'timeout'     => 8,
+			'redirection' => 0,
+			'headers'     => array(
 				'Accept'                 => 'text/x-component',
 				'Content-Type'           => 'text/plain;charset=UTF-8',
 				'next-action'            => $next_action,
@@ -925,7 +929,13 @@ JS;
 		}
 		set_transient( $throttle_key, true, 15 * MINUTE_IN_SECONDS );
 
-		$home = wp_remote_get( 'https://fountain.fm/', array( 'timeout' => 10 ) );
+		// redirection => 0: never let a remote host bounce an outbound
+		// request elsewhere - WP's default 5 hops would follow an open
+		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
+		$home = wp_remote_get( 'https://fountain.fm/', array(
+			'timeout'     => 10,
+			'redirection' => 0,
+		) );
 		if ( is_wp_error( $home ) || 200 !== (int) wp_remote_retrieve_response_code( $home ) ) {
 			return null;
 		}
@@ -934,17 +944,31 @@ JS;
 		preg_match_all( '/<script[^>]+src=["\']([^"\']+)["\']/i', $html, $matches );
 		$script_urls = array();
 		foreach ( $matches[1] as $src ) {
-			if ( 0 === strpos( $src, '/' ) ) {
+			// Normalise relative forms first (protocol-relative "//host/x",
+			// root-relative "/path") so the check below sees a real URL.
+			if ( 0 === strpos( $src, '//' ) ) {
+				$src = 'https:' . $src;
+			} elseif ( 0 === strpos( $src, '/' ) ) {
 				$src = 'https://fountain.fm' . $src;
 			}
-			if ( false !== strpos( $src, 'fountain.fm' ) && false !== strpos( $src, '_next' ) ) {
+
+			// Exact host match (apex or subdomain). The previous substring
+			// check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
+			// sending this server after whatever such a page declared.
+			$host    = wp_parse_url( $src, PHP_URL_HOST );
+			$trusted = $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
+
+			if ( $trusted && false !== strpos( $src, '_next' ) ) {
 				$script_urls[] = $src;
 			}
 		}
 		$script_urls = array_slice( array_unique( $script_urls ), 0, 20 );
 
 		foreach ( $script_urls as $script_url ) {
-			$response = wp_remote_get( $script_url, array( 'timeout' => 8 ) );
+			$response = wp_remote_get( $script_url, array(
+				'timeout'     => 8,
+				'redirection' => 0,
+			) );
 			if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
 				continue;
 			}
@@ -1061,9 +1085,13 @@ JS;
 	private function mi_api_get( $path ) {
 		$url = self::MI_API_BASE . $path;
 
+		// redirection => 0: never let a remote host bounce an outbound
+		// request elsewhere - WP's default 5 hops would follow an open
+		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
 		$response = wp_remote_get( $url, array(
-			'timeout' => 8,
-			'headers' => array(
+			'timeout'     => 8,
+			'redirection' => 0,
+			'headers'     => array(
 				'User-Agent' => 'phafe.com-MusicLink/1.10 (' . home_url() . ')',
 			),
 		) );
