@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.4
+ * Version: 1.20.5
  * Author: Matt Finlay
  *
  * USAGE:
@@ -35,6 +35,7 @@
  *    Or hardcode a specific release inline in a post/page instead:
  *    [musiclink_pro album="{album-guid}"]
  *    [musiclink_pro album="{album-guid}" track="{track-guid}"]
+ *    [musiclink_pro album="{album-guid}" header="false"]
  *
  * NOTES ON EACH TARGET APP (see project reference doc for full details):
  * - Stablekraft: fully formulaic guid-based URL, no lookup required.
@@ -75,6 +76,14 @@
  * apps (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) can be
  * individually disabled (hides its button entirely) and/or given a custom
  * icon URL overriding the default live favicon.
+ *
+ * HEADER CONTROLS: whether the release header (title, artist, artwork)
+ * appears above the buttons defaults to the "Release header" checkbox
+ * under Settings > V4V MusicLink Pro (default: shown). The optional
+ * header="true" / header="false" shortcode attribute overrides that
+ * setting per placement - useful when one page wants the bare button
+ * list while the site default is the opposite. Unrecognized header
+ * values fall back to the admin setting.
  *
  * VIEW LOGGING: every time a guid successfully resolves to a real release,
  * one row (date, artist, album, track) is logged to a dedicated database
@@ -595,6 +604,11 @@ class V4V_Music_Link_Resolver_Pro {
 			'sanitize_callback' => array( $this, 'sanitize_social_preview_mode' ),
 			'default'           => 'plugin_only',
 		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_show_header', array(
+			'type'              => 'boolean',
+			'sanitize_callback' => 'rest_sanitize_boolean',
+			'default'           => true,
+		) );
 		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_apps', array(
 			'type'              => 'array',
 			'sanitize_callback' => array( $this, 'sanitize_apps_settings' ),
@@ -816,6 +830,26 @@ class V4V_Music_Link_Resolver_Pro {
 					</tr>
 					<tr>
 						<th scope="row">
+							<?php esc_html_e( 'Release header', 'v4v-musiclink-pro' ); ?>
+						</th>
+						<td>
+							<input type="hidden" name="v4v_musiclink_pro_show_header" value="0" />
+							<label>
+								<input
+								type="checkbox"
+								name="v4v_musiclink_pro_show_header"
+								value="1"
+								<?php checked( get_option( 'v4v_musiclink_pro_show_header', true ) ); ?>
+								/>
+								<?php esc_html_e( 'Show the release title, artist and artwork above the music app buttons', 'v4v-musiclink-pro' ); ?>
+							</label>
+							<p class="description">
+								<?php esc_html_e( 'This is the site-wide default for every [musiclink_pro] shortcode. It can be overridden per placement with the optional header attribute: header="false" hides the header for that instance, header="true" shows it, regardless of this setting.', 'v4v-musiclink-pro' ); ?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
 							<label for="v4v_musiclink_pro_fountain_next_action"><?php esc_html_e( 'Fountain "next-action" header', 'v4v-musiclink-pro' ); ?></label>
 						</th>
 						<td>
@@ -849,7 +883,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.4', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.5', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),
@@ -1232,8 +1266,9 @@ JS;
 
 	public function render( $atts ) {
 		$atts = shortcode_atts( array(
-			'album' => '',
-			'track' => '',
+			'album'  => '',
+			'track'  => '',
+			'header' => '',
 		), $atts, 'musiclink_pro' );
 
 		// Explicit shortcode attributes (for hardcoding a specific release
@@ -1245,6 +1280,10 @@ JS;
 		$track = $atts['track']
 			? sanitize_text_field( $atts['track'] )
 			: ( isset( $_GET['track'] ) ? sanitize_text_field( wp_unslash( $_GET['track'] ) ) : '' );
+
+		// Optional per-placement override of the admin "Release header"
+		// setting; empty (not supplied) falls back to that setting.
+		$show_header = $this->resolve_show_header( $atts['header'] );
 
 		if ( empty( $album ) ) {
 			return $this->render_search_ui();
@@ -1352,7 +1391,29 @@ JS;
 			);
 		}
 
-		return $this->render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url );
+		return $this->render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header );
+	}
+
+	/**
+	 * Whether the release header (title/artist/artwork) should render.
+	 * The optional shortcode header="true|false" attribute overrides the
+	 * admin "Release header" setting; when the attribute is absent or has
+	 * an unrecognized value, the admin setting decides (default: shown).
+	 */
+	private function resolve_show_header( $raw ) {
+		$default = (bool) get_option( 'v4v_musiclink_pro_show_header', true );
+
+		if ( ! is_string( $raw ) ) {
+			return $default;
+		}
+		$value = strtolower( sanitize_text_field( $raw ) );
+		if ( in_array( $value, array( 'true', '1', 'yes', 'on' ), true ) ) {
+			return true;
+		}
+		if ( in_array( $value, array( 'false', '0', 'no', 'off' ), true ) ) {
+			return false;
+		}
+		return $default;
 	}
 
 	/**
@@ -1731,7 +1792,7 @@ JS;
 		return is_array( $body ) ? $body : null;
 	}
 
-	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url ) {
+	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true ) {
 		$heading = $has_track
 			? __( 'Listen to this track:', 'v4v-musiclink-pro' )
 			: __( 'Listen to this album:', 'v4v-musiclink-pro' );
@@ -1745,7 +1806,7 @@ JS;
 		ob_start();
 		?>
 		<div class="v4v-musiclink-pro">
-			<?php if ( $title_line || $art_url ) : ?>
+			<?php if ( $show_header && ( $title_line || $art_url ) ) : ?>
 				<div class="v4v-musiclink-pro-header">
 					<div class="v4v-musiclink-pro-info">
 						<?php if ( $title_line ) : ?>

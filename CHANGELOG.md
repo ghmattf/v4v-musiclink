@@ -3,6 +3,13 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.5] - 2026-09-23
+
+### Added
+- **New admin setting "Release header"** (Settings → V4V MusicLink Pro): site-wide checkbox controlling whether the release header (title, artist, artwork) shows above the music app buttons. Default: shown (unchanged behaviour). Option name `v4v_musiclink_pro_show_header`, isolated from the standard plugin's option.
+- **New optional shortcode attribute `header="true|false"`**: overrides the admin setting per placement, e.g. `[musiclink_pro album="…" header="false"]` hides the header for that instance. Accepted values: `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (case-insensitive); unrecognized or absent values fall back to the admin setting.
+- Plugin docblock documents the new attribute.
+
 ## Resolver (v4v-musiclink) — [1.22.2] - 2026-09-23
 
 ### Added
