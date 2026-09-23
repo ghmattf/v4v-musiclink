@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.8
+ * Version: 1.20.9
  * Author: Matt Finlay
  *
  * USAGE:
@@ -165,7 +165,13 @@ class V4V_Music_Link_Resolver_Pro {
 			return $title; // Bare search page - leave WordPress's normal title alone.
 		}
 		$fields = $this->compute_preview_fields( $post );
-		return $fields['title'] ? $fields['title'] : $title;
+
+		// esc_html(): core's _wp_render_title_tag() echoes the
+		// pre_get_document_title value verbatim, and this title comes from
+		// the external Music Index API - a "</title>" in a release title
+		// would otherwise close the element early and inject markup into
+		// the page (stored XSS via a catalog entry).
+		return $fields['title'] ? esc_html( $fields['title'] ) : $title;
 	}
 
 	/**
@@ -239,9 +245,16 @@ class V4V_Music_Link_Resolver_Pro {
 
 	public function rewrite_canonical_in_html( $html ) {
 		$correct_url = esc_url( home_url( add_query_arg( null, null ) ) );
-		return preg_replace(
+
+		// Callback rather than a replacement string: the URL is built from
+		// the request's query string, and "$" / "\" in a replacement are
+		// expanded as backreferences - "?x=$2" would splice the captured
+		// tag tail into the middle of the href and corrupt the markup.
+		return preg_replace_callback(
 			'/(<link[^>]+rel=["\']canonical["\'][^>]+href=["\'])[^"\']*(["\'][^>]*>)/i',
-			'$1' . $correct_url . '$2',
+			function ( $matches ) use ( $correct_url ) {
+				return $matches[1] . $correct_url . $matches[2];
+			},
 			$html,
 			1
 		);
@@ -275,7 +288,18 @@ class V4V_Music_Link_Resolver_Pro {
 		// keeps its normal WordPress title.
 		$album = isset( $_GET['album'] ) ? sanitize_text_field( wp_unslash( $_GET['album'] ) ) : '';
 		if ( $album && $fields['title'] ) {
-			$html = preg_replace( '/<title>.*?<\/title>/s', '<title>' . esc_html( $fields['title'] ) . '</title>', $html, 1 );
+			// Callback so a "$0" / "$1" in a release title is never expanded
+			// as a backreference (that would re-insert the raw old <title>
+			// element into the replacement, nesting/corrupting the head).
+			$replacement = '<title>' . esc_html( $fields['title'] ) . '</title>';
+			$html        = preg_replace_callback(
+				'/<title>.*?<\/title>/s',
+				function () use ( $replacement ) {
+					return $replacement;
+				},
+				$html,
+				1
+			);
 		}
 
 		$html = $this->set_or_insert_meta( $html, 'property', 'og:title', $fields['title'] );
@@ -314,7 +338,19 @@ class V4V_Music_Link_Resolver_Pro {
 
 		if ( preg_match( $pattern, $html ) ) {
 			$new_tag = '<meta ' . $attr . '="' . esc_attr( $attr_value ) . '" content="' . $escaped_content . '" />';
-			return preg_replace( $pattern, $new_tag, $html, 1 );
+
+			// Callback form: a "$0" / "$1" inside the escaped content must
+			// not be expanded as a backreference - that would re-insert the
+			// raw matched <meta> tag inside the attribute value and break
+			// out of the quote.
+			return preg_replace_callback(
+				$pattern,
+				function () use ( $new_tag ) {
+					return $new_tag;
+				},
+				$html,
+				1
+			);
 		}
 
 		$new_tag = '<meta ' . $attr . '="' . esc_attr( $attr_value ) . '" content="' . $escaped_content . '" />' . "\n";
@@ -1020,7 +1056,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.8', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.9', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl' => admin_url( 'admin-ajax.php' ),

@@ -3,6 +3,12 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.9] - 2026-09-23
+
+### Security
+- **Stored XSS via the document title**: `override_document_title()` returned the release title (external Music Index API data) verbatim from the `pre_get_document_title` filter, and WordPress core echoes that value unescaped in `<title>` - a catalog entry containing `</title><script>…</script>` would close the element early and inject markup into the page. Affects the default "On (this plugin only)" mode; "Entire Site" mode already re-emitted the tag escaped via its output-buffer rewrite. The value is now passed through `esc_html()`.
+- **Backreference injection in three `preg_replace()` replacement strings**: the canonical-tag rewrite (whose URL comes from the request's query string), the `<title>` rewrite, and the meta-tag rewriter all interpolated dynamic data into a `preg_replace()` replacement, where `$0` / `$1` / `$2` are expanded as backreferences. A crafted `?x=$2` URL corrupted/broke out of the rewritten canonical tag, and a release title containing `$0` spliced the raw old `<title>`/`<meta>` element back into the page. All three now use `preg_replace_callback()`, which does not parse `$` / `\`; output for benign inputs is byte-identical.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.8] - 2026-09-23
 
 ### Changed
