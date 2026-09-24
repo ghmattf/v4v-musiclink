@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.17] - 2026-09-24
+
+### Changed
+- **v4vmusic.com button now uses guid lookup instead of title search**: v4vmusic.com added public URL-based resolution, so the button now points straight at `https://v4vmusic.com/lookup/{album}` (or `https://v4vmusic.com/lookup/{album}/{track}` when a track guid is present), built purely from the shortcode's guids exactly like the Stablekraft and PodTunes buttons. The button therefore no longer depends on Music Index at all: the previous implementation linked a title search (`/search?q=…&type=songs|albums`) and was *silently omitted* whenever title resolution didn't yield the right field - a release whose track lookup missed but album resolved lost the button entirely - and it now renders whenever the release itself renders.
+
+## Resolver (v4v-musiclink) — [1.22.11] - 2026-09-24
+
+### Changed
+- **v4vmusic.com button now uses guid lookup instead of title search**: v4vmusic.com added public URL-based resolution, so the button now points straight at `https://v4vmusic.com/lookup/{album}` (or `https://v4vmusic.com/lookup/{album}/{track}` when a track guid is present), built purely from the shortcode's guids exactly like the Stablekraft and PodTunes buttons. The button therefore no longer depends on Music Index at all: the previous implementation linked a title search (`/search?q=…&type=songs|albums`) and was *silently omitted* whenever title resolution didn't yield the right field - a release whose track lookup missed but album resolved lost the button entirely - and it now renders whenever the release itself renders.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.16] - 2026-09-24
 
 ### Fixed

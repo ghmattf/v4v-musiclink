@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.10
+ * Version: 1.22.11
  * Author: Matt Finlay
  *
  * USAGE:
@@ -46,9 +46,10 @@
  * NOTES ON EACH TARGET APP (see project reference doc for full details):
  * - Stablekraft: fully formulaic guid-based URL, no lookup required.
  * - PodTunes.app: fully formulaic guid-based URL, no lookup required.
- * - v4vmusic.com: has no public album/track pages (modal-only UI), so this
- *   links to a v4vmusic.com *search* instead - song search when a track
- *   guid is present, album search otherwise. Titles come from Music Index.
+ * - v4vmusic.com: fully formulaic guid-based URL (/lookup/{album}, or
+ *   /lookup/{album}/{track} when a track guid is present), no lookup
+ *   required - so the button renders even if Music Index titles were
+ *   only partially resolved.
  * - Fountain: no reliable public guid-based or search-page link exists
  *   (both confirmed to 404 by direct testing). Their only resolution
  *   mechanism is the unofficial Server Action endpoint described above.
@@ -483,7 +484,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.10', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.11', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -710,24 +711,17 @@ JS;
 			);
 		}
 
-		// --- v4vmusic.com: search by title, resolved from Music Index ---
+		// --- v4vmusic.com: fully formulaic guid lookup, no lookup needed ---
 		if ( $this->is_app_enabled( 'v4vmusic' ) ) {
-			$v4vmusic_icon = $this->get_app_icon( 'v4vmusic', 'v4vmusic.com' );
-			if ( $has_track && $track_data && ! empty( $track_data['title'] ) ) {
-				$links['v4vmusic'] = array(
-					'url'      => 'https://v4vmusic.com/search?q=' . urlencode( $track_data['title'] ) . '&type=songs',
-					'label'    => 'v4vmusic.com',
-					'icon_url' => $v4vmusic_icon,
-				);
-			} elseif ( ! $has_track && $feed_data && ! empty( $feed_data['title'] ) ) {
-				$links['v4vmusic'] = array(
-					'url'      => 'https://v4vmusic.com/search?q=' . urlencode( $feed_data['title'] ) . '&type=albums',
-					'label'    => 'v4vmusic.com',
-					'icon_url' => $v4vmusic_icon,
-				);
+			$v4vmusic_url = 'https://v4vmusic.com/lookup/' . rawurlencode( $album );
+			if ( $has_track ) {
+				$v4vmusic_url .= '/' . rawurlencode( $track );
 			}
-			// If title resolution fails, v4vmusic.com is silently omitted
-			// rather than showing a search link with no meaningful query.
+			$links['v4vmusic'] = array(
+				'url'      => $v4vmusic_url,
+				'label'    => 'v4vmusic.com',
+				'icon_url' => $this->get_app_icon( 'v4vmusic', 'v4vmusic.com' ),
+			);
 		}
 
 		// --- Fountain: no reliable public link exists via guid or their
