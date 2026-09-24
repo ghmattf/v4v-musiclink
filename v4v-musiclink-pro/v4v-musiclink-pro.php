@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.18
+ * Version: 1.20.19
  * Author: Matt Finlay
  *
  * USAGE:
@@ -93,21 +93,38 @@
  * after this version is installed, and altered in place on upgrade (the
  * `app` column arrived with app-launch logging; schema version 1 -> 2):
  *
- *   - VIEWS: a guid supplied in the URL that resolves to a real release.
- *     One row per URL-driven render. Releases hardcoded into a shortcode
- *     attribute are not logged as views - that would add a row on every
- *     render of the post, feeds and crawlers included.
+ *   - OPENS: a visitor picking a result on the search page - the click
+ *     that generates the shareable URL. One row per pick, sent as a
+ *     beacon from the search results; the render that follows (and every
+ *     later view of that URL, shared-link opens included) logs nothing.
  *   - LAUNCHES: a click on an app button that actually navigates. One row
  *     carrying the same date/artist/album/track plus the `app` slug,
  *     from every placement (a click is a deliberate action), and only
  *     when the click goes through - cancelling Fountain's modal dialog
  *     logs nothing.
  *
+ * Page renders are never logged, from any source (URL query string or
+ * hardcoded shortcode attribute): a render can be triggered by refreshes,
+ * feeds, previews and crawlers alike, so it says little about deliberate
+ * usage while letting any request grow the table without bound.
+ *
+ * Both beacon endpoints are rate limited per client IP (30 requests per
+ * minute per endpoint by default, configurable under Settings): over-limit
+ * beacons are answered 429 and write nothing, and the check runs before
+ * any Music Index lookup, so a flood is never relayed upstream. Budgets
+ * are keyed on REMOTE_ADDR only - see is_rate_limited() for the window
+ * semantics.
+ *
+ * The table is pruned back to a configured maximum (100,000 rows by
+ * default, configurable under Settings) - checked at most once per hour
+ * after a row is written, so retention stays bounded without paying a
+ * size query on every insert.
+ *
  * The columns hold titles resolved from Music Index; the album/track
  * guids that drove a row are never stored, and nothing is written
  * anywhere else (no error log, no debug file). Rows are logged
  * unconditionally, not deduplicated per visitor/session. Read them and
- * run the reports - "Total by Artist/Album/Track" counts views,
+ * run the reports - "Total by Artist/Album/Track" counts opens,
  * "Total by Music App" counts launches - from the View Log and Reports
  * tabs under Settings > V4V MusicLink Pro, which can also clear the
  * table.
@@ -181,6 +198,8 @@ class V4V_Music_Link_Resolver_Pro {
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'wp_ajax_v4v_musiclink_pro_search', array( $this, 'ajax_search' ) );
 		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_search', array( $this, 'ajax_search' ) );
+		add_action( 'wp_ajax_v4v_musiclink_pro_log_open', array( $this, 'ajax_log_open' ) );
+		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_log_open', array( $this, 'ajax_log_open' ) );
 		add_action( 'wp_ajax_v4v_musiclink_pro_log_app', array( $this, 'ajax_log_app' ) );
 		add_action( 'wp_ajax_nopriv_v4v_musiclink_pro_log_app', array( $this, 'ajax_log_app' ) );
 		add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
@@ -274,21 +293,21 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * Logs one row: date, artist, album, track (blank when it's an
-	 * album-only view) plus the music app that was launched - blank for a
-	 * plain page view, one of app_registry()'s slugs for a button launch.
-	 * Only titles resolved from Music Index are stored; the album/track
-	 * guids that drove the row never are. Page views are logged for
-	 * URL-driven renders only (render() skips this when the guid came from
-	 * a hardcoded shortcode attribute); launches are logged wherever the
-	 * button was clicked, because a click is a deliberate action. Logged
-	 * unconditionally on every qualifying row, not deduplicated per
-	 * visitor/session.
+	 * Logs one row: date, artist, album, track (blank when the pick or
+	 * launch carried no track) plus the music app that was launched -
+	 * blank for a search-result open, one of app_registry()'s slugs for a
+	 * button launch. Only titles resolved from Music Index are stored; the
+	 * album/track guids that drove the row never are. Called only from the
+	 * two beacon handlers (ajax_log_open, ajax_log_app) - page renders
+	 * never log, from any source - and logged unconditionally on every
+	 * qualifying row, not deduplicated per visitor/session. After the
+	 * insert, at most once per hour, the table is pruned back to
+	 * log_max_rows() newest rows so retention stays bounded.
 	 *
 	 * @param string $artist      Resolved artist title.
 	 * @param string $album_title Resolved album title.
 	 * @param string $track_title Resolved track title, or ''.
-	 * @param string $app         Launched app slug, or '' for a view.
+	 * @param string $app         Launched app slug, or '' for an open.
 	 */
 	private function log_view( $artist, $album_title, $track_title, $app = '' ) {
 		global $wpdb;
@@ -303,6 +322,105 @@ class V4V_Music_Link_Resolver_Pro {
 			),
 			array( '%s', '%s', '%s', '%s', '%s' )
 		);
+
+		// Retention backstop. The size check walks the primary key past
+		// the cap, so it is throttled to at most one attempt per hour:
+		// the table may overshoot the cap between checks, but never for
+		// long under sustained traffic, and the common case (a handful of
+		// rows a day) pays nothing.
+		if ( ! get_transient( 'v4v_log_prune' ) ) {
+			$this->prune_log();
+			set_transient( 'v4v_log_prune', 1, HOUR_IN_SECONDS );
+		}
+	}
+
+	/**
+	 * Keeps the log at its configured maximum by deleting every row at or
+	 * below the id of the first row that falls outside the newest
+	 * log_max_rows() entries (id is AUTO_INCREMENT, so id order is
+	 * insertion order). When the table is at or under the cap the OFFSET
+	 * lookup returns nothing and no DELETE is issued. Runs at most hourly,
+	 * from log_view() - see the throttle there.
+	 */
+	private function prune_log() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'v4v_musiclink_pro_log';
+		$cutoff = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT id FROM {$table} ORDER BY id DESC LIMIT 1 OFFSET %d",
+				$this->log_max_rows()
+			)
+		);
+
+		if ( ! $cutoff ) {
+			return; // At or under the cap - nothing to prune.
+		}
+
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id <= %d", $cutoff ) );
+	}
+
+	/**
+	 * Per-endpoint log-write budget for is_rate_limited(): requests per
+	 * minute one client IP may have accepted for the given bucket
+	 * ('log_app' or 'log_open'), read from the matching admin setting and
+	 * re-clamped here so a value written outside the settings UI can't
+	 * disable logging (0/blank -> default 30) or exceed 600/min.
+	 *
+	 * @param string $bucket Rate-limiter bucket; doubles as the option-name suffix.
+	 * @return int Allowed requests per minute.
+	 */
+	private function log_rate_max( $bucket ) {
+		return $this->sanitize_log_rate( get_option( 'v4v_musiclink_pro_' . $bucket . '_rate', 30 ) );
+	}
+
+	/**
+	 * Configured row cap for the log: the newest this many rows are kept
+	 * (see prune_log()). Same defensive re-clamping as log_rate_max(),
+	 * with 0/blank -> default 100,000 and a 1,000..1,000,000 range.
+	 *
+	 * @return int Maximum rows kept.
+	 */
+	private function log_max_rows() {
+		return $this->sanitize_log_max_rows( get_option( 'v4v_musiclink_pro_log_max_rows', 100000 ) );
+	}
+
+	/**
+	 * AJAX beacon fired when a visitor picks a result on the search page -
+	 * the click that generates the shareable URL. This is the only thing
+	 * that logs an "open": the render it navigates to (and any later view
+	 * of that URL, shared links included) deliberately logs nothing. The
+	 * page sends only the guids; the titles are resolved server-side
+	 * before anything is written, so the client never decides what lands
+	 * in the log, and the guids have to resolve to a real release or
+	 * nothing is recorded.
+	 */
+	public function ajax_log_open() {
+		// Same nonce action as the launch beacon - one "log write" token
+		// family, so already-cached pages keep verifying after upgrade.
+		check_ajax_referer( 'v4v_musiclink_pro_log_app', 'nonce' );
+
+		// Bound the write path before it spends any upstream work - see
+		// is_rate_limited() for the window semantics.
+		if ( $this->is_rate_limited( 'log_open', $this->log_rate_max( 'log_open' ), MINUTE_IN_SECONDS ) ) {
+			wp_send_json_error( null, 429 );
+		}
+
+		$album = isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '';
+		$track = isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '';
+
+		if ( ! $album ) {
+			wp_send_json_error( null, 400 );
+		}
+
+		$has_track = ! empty( $track );
+		$release   = $this->resolve_release_meta( $album, $track, $has_track );
+
+		if ( ! $release['album_title'] && ! $release['track_title'] ) {
+			wp_send_json_error( null, 404 );
+		}
+
+		$this->log_view( $release['artist'], $release['album_title'], $release['track_title'] );
+		wp_send_json_success();
 	}
 
 	/**
@@ -316,6 +434,13 @@ class V4V_Music_Link_Resolver_Pro {
 	 */
 	public function ajax_log_app() {
 		check_ajax_referer( 'v4v_musiclink_pro_log_app', 'nonce' );
+
+		// Bound the write path before it spends any upstream work - see
+		// is_rate_limited() for the window semantics. Own budget, so
+		// launch floods can't starve search-result opens or vice versa.
+		if ( $this->is_rate_limited( 'log_app', $this->log_rate_max( 'log_app' ), MINUTE_IN_SECONDS ) ) {
+			wp_send_json_error( null, 429 );
+		}
 
 		$album    = isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '';
 		$track    = isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '';
@@ -658,13 +783,14 @@ class V4V_Music_Link_Resolver_Pro {
 			$where[] = "track != ''";
 		}
 		if ( 'app' === $report_type ) {
-			// Launch rows only - a blank app means a plain page view.
+			// Launch rows only - a blank app means a search-result open.
 			$where[] = "app != ''";
 		} else {
-			// Keep launch rows out of the three view reports: a launch
-			// repeats the artist/album/track of the click it came from, so
-			// counting both would double up numbers that have always meant
-			// "logged views".
+			// Keep launch rows out of the three open reports: a launch
+			// repeats the artist/album/track of the open behind it, so
+			// counting both would double numbers these reports have always
+			// presented per release. (Blank-app rows written before opens
+			// replaced URL views still count here, as they always did.)
 			$where[] = "app = ''";
 		}
 		if ( $artist_filter ) {
@@ -772,7 +898,7 @@ class V4V_Music_Link_Resolver_Pro {
 		<p>
 			<?php
 			printf(
-				/* translators: %d: total number of log entries (page views and app launches) */
+				/* translators: %d: total number of log entries (search-result opens and app launches) */
 				esc_html__( 'Showing the most recent 100 of %d total log entries.', 'v4v-musiclink-pro' ),
 				(int) $total
 			);
@@ -809,7 +935,7 @@ class V4V_Music_Link_Resolver_Pro {
 							<td><?php echo esc_html( $row->artist ); ?></td>
 							<td><?php echo esc_html( $row->album ); ?></td>
 							<td><?php echo esc_html( $row->track ? $row->track : '—' ); ?></td>
-							<?php /* Blank app = a page view; a slug = the button that launched. */ ?>
+							<?php /* Blank app = a search-result open; a slug = the button that launched. */ ?>
 							<td><?php echo esc_html( $row->app ? $this->app_display_label( $row->app ) : '—' ); ?></td>
 						</tr>
 					<?php endforeach; ?>
@@ -873,6 +999,60 @@ class V4V_Music_Link_Resolver_Pro {
 			'sanitize_callback' => array( $this, 'sanitize_apps_settings' ),
 			'default'           => array(),
 		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_log_app_rate', array(
+			'type'              => 'integer',
+			'sanitize_callback' => array( $this, 'sanitize_log_rate' ),
+			'default'           => 30,
+		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_log_open_rate', array(
+			'type'              => 'integer',
+			'sanitize_callback' => array( $this, 'sanitize_log_rate' ),
+			'default'           => 30,
+		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_log_max_rows', array(
+			'type'              => 'integer',
+			'sanitize_callback' => array( $this, 'sanitize_log_max_rows' ),
+			'default'           => 100000,
+		) );
+	}
+
+	/**
+	 * Sanitize callback for both log-write rate settings: accepted
+	 * requests per minute, per client IP, for one beacon endpoint.
+	 * Blank/zero/garbage falls back to the 30/min default rather than 0 -
+	 * a 0 saved here would silently turn every log beacon into a 429 and
+	 * quietly stop all logging - and anything above 600/min (10 per
+	 * second) is clamped, so the setting can tune the budget but can't
+	 * remove the flood guard entirely.
+	 *
+	 * @param mixed $value Raw option value from the settings form.
+	 * @return int Allowed requests per minute, 1..600.
+	 */
+	public function sanitize_log_rate( $value ) {
+		$value = absint( $value );
+		if ( $value < 1 ) {
+			return 30;
+		}
+		return min( $value, 600 );
+	}
+
+	/**
+	 * Sanitize callback for the log row cap: the newest this many rows
+	 * are kept (see prune_log()). Blank/zero/garbage falls back to the
+	 * 100,000 default, and the value is clamped to 1,000..1,000,000 -
+	 * below a thousand the log is useless and prune churns on nearly
+	 * every insert, above a million the reports scan badly (the reason
+	 * the cap exists at all).
+	 *
+	 * @param mixed $value Raw option value from the settings form.
+	 * @return int Maximum rows kept, 1000..1000000.
+	 */
+	public function sanitize_log_max_rows( $value ) {
+		$value = absint( $value );
+		if ( $value < 1 ) {
+			return 100000;
+		}
+		return max( 1000, min( $value, 1000000 ) );
 	}
 
 	/**
@@ -1274,6 +1454,78 @@ class V4V_Music_Link_Resolver_Pro {
 							</p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row">
+							<label for="v4v_musiclink_pro_log_app_rate"><?php esc_html_e( 'App-launch log rate (per minute, per IP)', 'v4v-musiclink-pro' ); ?></label>
+						</th>
+						<td>
+							<input
+								type="number"
+								min="1"
+								max="600"
+								id="v4v_musiclink_pro_log_app_rate"
+								name="v4v_musiclink_pro_log_app_rate"
+								value="<?php echo esc_attr( get_option( 'v4v_musiclink_pro_log_app_rate', 30 ) ); ?>"
+								class="small-text"
+							/>
+							<p class="description">
+								<?php
+								esc_html_e(
+									'How many app-button launch beacons one visitor IP address may have accepted per minute (default 30, allowed range 1-600). Beacons over the budget receive an error response and write nothing, and the check runs before any Music Index lookup, so a flood can never be relayed upstream; page rendering, search and the buttons themselves are never blocked by this. The budget is per endpoint and per IP (never the spoofable forwarded headers), and requests over the limit do not extend it, so a shared address can never be locked out permanently.',
+									'v4v-musiclink-pro'
+								);
+								?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
+							<label for="v4v_musiclink_pro_log_open_rate"><?php esc_html_e( 'Search-result open log rate (per minute, per IP)', 'v4v-musiclink-pro' ); ?></label>
+						</th>
+						<td>
+							<input
+								type="number"
+								min="1"
+								max="600"
+								id="v4v_musiclink_pro_log_open_rate"
+								name="v4v_musiclink_pro_log_open_rate"
+								value="<?php echo esc_attr( get_option( 'v4v_musiclink_pro_log_open_rate', 30 ) ); ?>"
+								class="small-text"
+							/>
+							<p class="description">
+								<?php
+								esc_html_e(
+									'Same budget, counted separately, for the beacon fired when a visitor picks a search result - the only thing that logs an "open" (the page render that follows logs nothing, and a shared link opened cold is deliberately not counted). Separate from the launch budget, so one kind of traffic can never starve the other. Blank or invalid values fall back to 30 on save.',
+									'v4v-musiclink-pro'
+								);
+								?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
+							<label for="v4v_musiclink_pro_log_max_rows"><?php esc_html_e( 'Maximum log rows kept', 'v4v-musiclink-pro' ); ?></label>
+						</th>
+						<td>
+							<input
+								type="number"
+								min="1000"
+								max="1000000"
+								id="v4v_musiclink_pro_log_max_rows"
+								name="v4v_musiclink_pro_log_max_rows"
+								value="<?php echo esc_attr( get_option( 'v4v_musiclink_pro_log_max_rows', 100000 ) ); ?>"
+								class="small-text"
+							/>
+							<p class="description">
+								<?php
+								esc_html_e(
+									'The log keeps only its newest rows: once the count passes this limit, the oldest are deleted (default 100,000, allowed range 1,000-1,000,000). The size check runs at most once per hour, after a row is written, so the table may briefly sit above the limit between checks; the Clear log button on the View Log tab still empties it immediately. Blank or invalid values fall back to 100,000 on save.',
+									'v4v-musiclink-pro'
+								);
+								?>
+							</p>
+						</td>
+					</tr>
 				</table>
 				<?php submit_button(); ?>
 			</form>
@@ -1287,13 +1539,14 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.18', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.19', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
 			'nonce'     => wp_create_nonce( 'v4v_musiclink_pro_search' ),
-			// Separate nonce for the launch beacon, so a token lifted from
-			// the page can't be replayed against the other endpoint.
+			// Separate nonce for the log-write beacons (app launches and
+			// search-result opens share it), so a token lifted from the
+			// page can't be replayed against the search endpoint.
 			'logNonce'  => wp_create_nonce( 'v4v_musiclink_pro_log_app' ),
 			'i18n'      => array(
 				'searching'   => __( 'Searching…', 'v4v-musiclink-pro' ),
@@ -1533,6 +1786,23 @@ class V4V_Music_Link_Resolver_Pro {
 								btn.appendChild(titleEl);
 								btn.appendChild(subtitleEl);
 								btn.addEventListener("click", function () {
+									// Record the open: this click is what generates
+									// the page URL, so it - not the render that
+									// follows - is the event worth logging. Fire
+									// and forget; sendBeacon survives the
+									// navigation below, and titles are resolved
+									// server-side from the guids alone.
+									var logBody = new URLSearchParams();
+									logBody.append("action", "v4v_musiclink_pro_log_open");
+									logBody.append("nonce", v4vMusicLinkPro.logNonce);
+									logBody.append("album", item.album_guid);
+									logBody.append("track", item.track_guid || "");
+									if (navigator.sendBeacon) {
+										navigator.sendBeacon(v4vMusicLinkPro.ajaxUrl, logBody);
+									} else {
+										fetch(v4vMusicLinkPro.ajaxUrl, { method: "POST", body: logBody, keepalive: true }).catch(function () {});
+									}
+
 									var url = new URL(window.location.pathname, window.location.origin);
 									url.searchParams.set("album", item.album_guid);
 									if (item.track_guid) {
@@ -1803,13 +2073,6 @@ JS;
 			'header' => '',
 		), $atts, 'musiclink_pro' );
 
-		// Did either guid arrive as a hardcoded shortcode attribute (a
-		// release embedded in post content) rather than from the URL's
-		// query string? Decided here, before the two sources are merged
-		// below, because afterwards the value no longer says where it came
-		// from. Drives whether the view is logged - see log_view() call.
-		$from_shortcode = ! empty( $atts['album'] ) || ! empty( $atts['track'] );
-
 		// Explicit shortcode attributes (for hardcoding a specific release
 		// inline in post content) take priority over the URL's query string
 		// (used by the shareable /musiclink page).
@@ -1840,15 +2103,6 @@ JS;
 
 		if ( ! $album_title && ! $track_title ) {
 			return $this->render_search_ui( __( 'Album/Song not found', 'v4v-musiclink-pro' ) );
-		}
-
-		// Only URL-driven views are logged: a release hardcoded into a
-		// shortcode attribute belongs to the post, not to a shared link, so
-		// logging it would write a row on *every* render of that post -
-		// page views, feeds, previews and crawler hits alike - and bury the
-		// numbers the reports are meant to show.
-		if ( ! $from_shortcode ) {
-			$this->log_view( $artist, $album_title, $track_title );
 		}
 
 		$links = array();
