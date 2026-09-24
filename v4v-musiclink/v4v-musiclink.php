@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.9
+ * Version: 1.22.10
  * Author: Matt Finlay
  *
  * USAGE:
@@ -87,9 +87,23 @@ class V4V_Music_Link_Resolver {
 	const MI_API_BASE    = 'https://api.musicindex.org/v1';
 	const CACHE_TTL       = 12 * HOUR_IN_SECONDS;
 	const FAIL_CACHE_TTL  = HOUR_IN_SECONDS;
+	// Negative cache for failures that do NOT prove the guid is missing
+	// (timeout, DNS error, 5xx, redirect, undecodable body). Long enough to
+	// stop hammering a struggling API, short enough that an outage stops
+	// masquerading as "Album/Song not found" almost immediately - see
+	// negative_cache_ttl().
+	const SOFT_FAIL_CACHE_TTL = 30;
 	// Bump whenever the shape of what gets cached changes, so old
 	// transients (with different/missing fields) are never served stale.
 	const CACHE_SCHEMA_VERSION = 4;
+
+	/**
+	 * HTTP status of the most recent mi_api_get() call (0 = transport
+	 * failure or an undecodable body). Lets mi_get_feed()/mi_get_track()
+	 * distinguish a definitive 404 from an unreliable failure when they
+	 * decide how long to remember a miss - see negative_cache_ttl().
+	 */
+	private $last_mi_status = 0;
 
 	public function __construct() {
 		add_shortcode( 'musiclink', array( $this, 'render' ) );
@@ -469,7 +483,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.9', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.10', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -1088,7 +1102,7 @@ JS;
 		$body = $this->mi_api_get( '/feeds/' . rawurlencode( $feed_guid ) );
 
 		if ( empty( $body['data']['title'] ) ) {
-			set_transient( $cache_key, array(), self::FAIL_CACHE_TTL );
+			set_transient( $cache_key, array(), $this->negative_cache_ttl() );
 			return null;
 		}
 
@@ -1115,7 +1129,7 @@ JS;
 		$body = $this->mi_api_get( '/feeds/' . rawurlencode( $feed_guid ) . '/tracks/' . rawurlencode( $track_guid ) );
 
 		if ( empty( $body['data']['title'] ) ) {
-			set_transient( $cache_key, array(), self::FAIL_CACHE_TTL );
+			set_transient( $cache_key, array(), $this->negative_cache_ttl() );
 			return null;
 		}
 
@@ -1131,9 +1145,33 @@ JS;
 	}
 
 	/**
+	 * How long a failed lookup may be remembered as "not found".
+	 *
+	 * A definitive answer - HTTP 404, or a 200 whose payload simply lacks
+	 * the title - proves the guid doesn't resolve, so it earns the full
+	 * FAIL_CACHE_TTL. Anything else (timeout, DNS, 5xx, redirect,
+	 * undecodable body) says nothing about the guid itself. Caching *that*
+	 * for an hour is what made a brief Music Index outage keep rendering
+	 * "Album/Song not found" long after the API recovered: the negative
+	 * transient short-circuited every retry, and the one plugin could show
+	 * a stale success from its own separate keyspace while the other kept
+	 * serving the recorded failure. Unconfirmed failures get only
+	 * SOFT_FAIL_CACHE_TTL - enough to spare a struggling API a retry storm,
+	 * little enough to self-heal almost immediately.
+	 */
+	private function negative_cache_ttl() {
+		return ( 200 === $this->last_mi_status || 404 === $this->last_mi_status )
+			? self::FAIL_CACHE_TTL
+			: self::SOFT_FAIL_CACHE_TTL;
+	}
+
+	/**
 	 * Low-level GET against the Music Index API. Returns the decoded
 	 * response body as an array, or null on any failure (network error,
-	 * non-200 response, bad JSON). No authentication required.
+	 * non-200 response, bad JSON). No authentication required. Records the
+	 * outcome's HTTP status in $last_mi_status (0 = unreliable: transport
+	 * error or undecodable body) so callers can pick the right negative
+	 * cache TTL - see negative_cache_ttl().
 	 */
 	private function mi_api_get( $path ) {
 		$url = self::MI_API_BASE . $path;
@@ -1149,12 +1187,25 @@ JS;
 			),
 		) );
 
-		if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+		if ( is_wp_error( $response ) ) {
+			$this->last_mi_status = 0;
+			return null;
+		}
+
+		$this->last_mi_status = (int) wp_remote_retrieve_response_code( $response );
+
+		if ( 200 !== $this->last_mi_status ) {
 			return null;
 		}
 
 		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-		return is_array( $body ) ? $body : null;
+		if ( ! is_array( $body ) ) {
+			// A 200 we can't parse proves nothing either - don't let a
+			// transient proxy error be remembered as a missing guid.
+			$this->last_mi_status = 0;
+			return null;
+		}
+		return $body;
 	}
 
 	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true ) {

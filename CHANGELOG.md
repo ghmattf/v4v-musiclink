@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.16] - 2026-09-24
+
+### Fixed
+- **An API hiccup no longer masquerades as "Album/Song not found" for an hour**: `mi_api_get()` used to collapse every failure - timeout, DNS error, 5xx, an SSRF-blocked redirect, an undecodable body *and* a true `404` - into one `null`, and both callers then recorded that `null` as a definitive "guid doesn't exist" for `FAIL_CACHE_TTL` (1 hour). One blip therefore poisoned the track and feed transients together, and every render for the next hour answered "Album/Song not found" straight from cache without a single network retry - even after Music Index recovered, and independently of the Pro keyspace, which is why one plugin could keep showing a stale success while the other showed a false failure. The status of each request is now recorded, and only a **definitive** miss (`404`, or a `200` whose payload simply lacks the title) earns the full hour; everything unconfirmed is negative-cached for **30 seconds** (`SOFT_FAIL_CACHE_TTL`) - enough to spare a struggling API a retry storm, little enough to self-heal almost immediately. An undecodable `200` is also demoted to unconfirmed, so a transient proxy error can never be remembered as a missing guid.
+
+## Resolver (v4v-musiclink) — [1.22.10] - 2026-09-24
+
+### Fixed
+- **An API hiccup no longer masquerades as "Album/Song not found" for an hour**: `mi_api_get()` used to collapse every failure - timeout, DNS error, 5xx, an SSRF-blocked redirect, an undecodable body *and* a true `404` - into one `null`, and both callers then recorded that `null` as a definitive "guid doesn't exist" for `FAIL_CACHE_TTL` (1 hour). One blip therefore poisoned the track and feed transients together, and every render for the next hour answered "Album/Song not found" straight from cache without a single network retry - even after Music Index recovered, and independently of the Pro keyspace, which is why one plugin could keep showing a stale success while the other showed a false failure. The status of each request is now recorded, and only a **definitive** miss (`404`, or a `200` whose payload simply lacks the title) earns the full hour; everything unconfirmed is negative-cached for **30 seconds** (`SOFT_FAIL_CACHE_TTL`) - enough to spare a struggling API a retry storm, little enough to self-heal almost immediately. An undecodable `200` is also demoted to unconfirmed, so a transient proxy error can never be remembered as a missing guid.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.15] - 2026-09-24
 
 ### Security
