@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.12
+ * Version: 1.22.13
  * Author: Matt Finlay
  *
  * USAGE:
@@ -501,7 +501,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.12', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.13', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -813,12 +813,14 @@ JS;
 	 * given guid(s) didn't match anything in Music Index. Since URL
 	 * parameters and the search UI have both been removed, the only way
 	 * to use this shortcode is with explicit attributes - so this message
-	 * doubles as inline usage instructions.
+	 * doubles as inline usage instructions. A "V4V MusicLink" heading sits
+	 * above the message so the block is identifiable wherever it appears.
 	 */
 	private function render_missing_params_message( $reason = '' ) {
 		ob_start();
 		?>
 		<div class="v4v-musiclink v4v-musiclink-missing-params">
+			<h1 class="v4v-musiclink-title"><?php esc_html_e( 'V4V MusicLink', 'v4v-musiclink' ); ?></h1>
 			<p class="v4v-musiclink-error"><?php echo esc_html( $reason ? $reason : __( 'Missing parameter(s)', 'v4v-musiclink' ) ); ?></p>
 			<p><?php esc_html_e( 'params:', 'v4v-musiclink' ); ?></p>
 			<pre>album="&lt;album-guid&gt;"</pre>

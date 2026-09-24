@@ -3,6 +3,11 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.13] - 2026-09-25
+
+### Added
+- **The inline usage/error message block now identifies itself with a "V4V MusicLink" heading**: both "Missing parameter(s)" and "Album/Song not found" are produced by the same shared method (`render_missing_params_message()`), and both now display an `<h1 class="v4v-musiclink-title">V4V MusicLink</h1>` line directly above the error text - reusing the release header's heading style - so an embedded message reads as part of the plugin instead of an unexplained red error line. All three paths into the block are covered by the new harness: bare shortcode, unexpected attribute name, and an unresolvable guid.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.19] - 2026-09-24
 
 ### Changed
