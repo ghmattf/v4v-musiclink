@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.17
+ * Version: 1.20.18
  * Author: Matt Finlay
  *
  * USAGE:
@@ -15,7 +15,7 @@
  *      a) Open https://fountain.fm in a browser, dev tools open,
  *         Network tab, Fetch/XHR filter on.
  *      b) Search for anything in Fountain's own search box.
- *      c) Find the POST request to "fountain.fm/", open its Headers, copy
+ *      c) Find the POST request to "fountain.fm/search", open its Headers, copy
  *         the "next-action" header value (a long hex string).
  *      d) Paste it into Settings > V4V MusicLink in wp-admin.
  *    This value is a build fingerprint that changes whenever Fountain
@@ -158,6 +158,23 @@ class V4V_Music_Link_Resolver_Pro {
 	 * decide how long to remember a miss - see negative_cache_ttl().
 	 */
 	private $last_mi_status = 0;
+
+	/**
+	 * HTTP status of the most recent fountain_try_resolve() call (0 =
+	 * transport failure, redirect, or a 200 body we couldn't read as a
+	 * hits payload). Lets fountain_negative_cache_ttl() separate a
+	 * definitive Fountain answer from an unreliable failure - the same
+	 * policy negative_cache_ttl() applies to the Music Index API.
+	 */
+	private $last_fountain_status = 0;
+
+	/**
+	 * Whether the last extract_fountain_hit() actually parsed a hits
+	 * array (an empty one included = a trustworthy "Fountain has no
+	 * results for this"). When false after a 200, the body was not the
+	 * shape we understand, so the miss is unconfirmed.
+	 */
+	private $last_fountain_hits_parsed = false;
 
 	public function __construct() {
 		add_shortcode( 'musiclink_pro', array( $this, 'render' ) );
@@ -1250,7 +1267,7 @@ class V4V_Music_Link_Resolver_Pro {
 							<p class="description">
 								<?php
 								esc_html_e(
-									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to fountain.fm plainly until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/", and copy its "next-action" request header.',
+									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to fountain.fm plainly until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
 									'v4v-musiclink-pro'
 								);
 								?>
@@ -1270,7 +1287,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.17', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.18', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2257,7 +2274,9 @@ JS;
 	/**
 	 * A single resolution attempt against Fountain's unofficial search
 	 * endpoint using a specific next-action value. Cached per guid+value
-	 * pair, so a stale cached failure never survives a next-action change.
+	 * pair, so a stale cached failure never survives a next-action change;
+	 * how long a miss is remembered depends on how trustworthy it was
+	 * (see fountain_negative_cache_ttl()).
 	 */
 	private function fountain_try_resolve( $guid, $search_text, $next_action ) {
 		// v5: the cached value is now the whole hit (id + _type), not just
@@ -2273,7 +2292,16 @@ JS;
 		// redirection => 0: never let a remote host bounce an outbound
 		// request elsewhere - WP's default 5 hops would follow an open
 		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
-		$response = wp_remote_post( 'https://fountain.fm/', array(
+		//
+		// POST target is /search, NOT the site root: searchContent is a
+		// page-bound action registered from the search page's own module
+		// graph, and since Fountain's restructure a root POST gets an
+		// empty application/json {} back instead of results (confirmed
+		// live in 2026 - same id, same body, only the path differs),
+		// while the same POST to /search returns the hits payload. The
+		// headers and body below stay exactly what Fountain's own client
+		// sends (the state-tree header is tolerated as-is).
+		$response = wp_remote_post( 'https://fountain.fm/search', array(
 			'timeout'     => 8,
 			'redirection' => 0,
 			'headers'     => array(
@@ -2296,15 +2324,22 @@ JS;
 			'body' => wp_json_encode( array( $search_text, array() ) ),
 		) );
 
-		if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
-			set_transient( $cache_key, '', self::FAIL_CACHE_TTL );
-			return null;
+		$this->last_fountain_status = is_wp_error( $response )
+			? 0
+			: (int) wp_remote_retrieve_response_code( $response );
+
+		$hit = null;
+		if ( 200 === $this->last_fountain_status ) {
+			$hit = $this->extract_fountain_hit( wp_remote_retrieve_body( $response ), $guid );
+			if ( ! $hit && ! $this->last_fountain_hits_parsed ) {
+				// A 200 whose body wasn't a readable hits payload is not a
+				// trustworthy "no" - treat it like an unreliable failure.
+				$this->last_fountain_status = 0;
+			}
 		}
 
-		$hit = $this->extract_fountain_hit( wp_remote_retrieve_body( $response ), $guid );
-
 		if ( ! $hit ) {
-			set_transient( $cache_key, '', self::FAIL_CACHE_TTL );
+			set_transient( $cache_key, '', $this->fountain_negative_cache_ttl() );
 			return null;
 		}
 
@@ -2313,14 +2348,47 @@ JS;
 	}
 
 	/**
+	 * How long to remember a Fountain resolution miss - the Fountain-side
+	 * twin of negative_cache_ttl(), applying the same policy (#8) to
+	 * finding a hit:
+	 *
+	 *   - 404: Fountain doesn't know the next-action id (stale build
+	 *     fingerprint after a redeploy). The self-heal path then tries a
+	 *     FRESH id, whose attempts are cached under a different key, so
+	 *     the long TTL can never block recovery.
+	 *   - 200 whose hits payload we could read but which lacks our guid:
+	 *     Fountain genuinely has no match for this guid+title pair.
+	 *
+	 * Both are definitive and keep FAIL_CACHE_TTL. Everything else -
+	 * transport failure, 5xx, redirect, or a 200 body we couldn't read -
+	 * is unconfirmed and gets SOFT_FAIL_CACHE_TTL, so one blip can't pin
+	 * the button to the plain fountain.fm link for a full hour.
+	 */
+	private function fountain_negative_cache_ttl() {
+		return ( 200 === $this->last_fountain_status || 404 === $this->last_fountain_status )
+			? self::FAIL_CACHE_TTL
+			: self::SOFT_FAIL_CACHE_TTL;
+	}
+
+	/**
 	 * Best-effort background attempt to discover Fountain's current
-	 * "next-action" Server Action ID by fetching the homepage, finding
-	 * same-origin JS chunk URLs, and searching each for a 40-44 character
-	 * hex string appearing near the word "search" (a plausibility filter -
-	 * minifiers preserve string literals but mangle variable/function
-	 * names). Returns the FIRST candidate found, short-circuiting rather
-	 * than exhaustively scanning every chunk, since live testing found the
-	 * first result tends to be the correct one.
+	 * "next-action" Server Action ID by fetching Fountain's search page
+	 * AND its homepage, finding same-origin JS chunk URLs, and searching
+	 * each for a 40-44 character hex string appearing near the word
+	 * "search" (a plausibility filter - minifiers preserve string
+	 * literals but mangle variable/function names). Returns the FIRST
+	 * candidate found, short-circuiting rather than exhaustively
+	 * scanning every chunk, since live testing found the first result
+	 * tends to be the correct one (in the live search chunk the
+	 * searchContent registration is declared before searchProfiles, so
+	 * the first candidate is the right action).
+	 *
+	 * The search page leads because that is where the registration now
+	 * lives: searchContent is bound from chunks ONLY /search references
+	 * (verified live in 2026 - there are zero near-"search" candidates
+	 * anywhere in the homepage's own chunks), so a homepage-only crawl
+	 * can no longer self-heal anything. The homepage stays in the seed
+	 * list as fallback coverage in case Fountain moves it back.
 	 *
 	 * Throttled to at most once per 15 minutes (regardless of outcome) so
 	 * a broken detection mechanism doesn't repeatedly hammer fountain.fm
@@ -2335,45 +2403,70 @@ JS;
 		}
 		set_transient( $throttle_key, true, 15 * MINUTE_IN_SECONDS );
 
+		// Collect same-origin _next chunk URLs from both seed pages.
 		// redirection => 0: never let a remote host bounce an outbound
 		// request elsewhere - WP's default 5 hops would follow an open
 		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
-		$home = wp_remote_get( 'https://fountain.fm/', array(
-			'timeout'     => 10,
-			'redirection' => 0,
-		) );
-		if ( is_wp_error( $home ) || 200 !== (int) wp_remote_retrieve_response_code( $home ) ) {
+		$seed_scripts = array(); // Seed URL => unique trusted chunk URLs on that page.
+		foreach ( array( 'https://fountain.fm/search', 'https://fountain.fm/' ) as $seed_url ) {
+			$seed_response = wp_remote_get( $seed_url, array(
+				'timeout'     => 10,
+				'redirection' => 0,
+			) );
+			if ( is_wp_error( $seed_response ) || 200 !== (int) wp_remote_retrieve_response_code( $seed_response ) ) {
+				continue;
+			}
+			preg_match_all( '/<script[^>]+src=["\']([^"\']+)["\']/i', wp_remote_retrieve_body( $seed_response ), $matches );
+
+			$found = array();
+			foreach ( $matches[1] as $src ) {
+				// Normalise relative forms first (protocol-relative "//host/x",
+				// root-relative "/path") so the check below sees a real URL.
+				if ( 0 === strpos( $src, '//' ) ) {
+					$src = 'https:' . $src;
+				} elseif ( 0 === strpos( $src, '/' ) ) {
+					$src = 'https://fountain.fm' . $src;
+				}
+
+				// Exact host match (apex or subdomain), HTTPS only. The previous
+				// substring check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
+				// sending this server after whatever such a page declared. The
+				// scheme check keeps a cleartext http:// chunk - modifiable in
+				// transit - from supplying a next-action value this plugin then
+				// persists via update_option().
+				$host    = wp_parse_url( $src, PHP_URL_HOST );
+				$scheme  = wp_parse_url( $src, PHP_URL_SCHEME );
+				$trusted = $scheme && 'https' === strtolower( $scheme )
+					&& $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
+
+				if ( $trusted && false !== strpos( $src, '_next' ) ) {
+					$found[] = $src;
+				}
+			}
+			$seed_scripts[ $seed_url ] = array_values( array_unique( $found ) );
+		}
+		if ( ! $seed_scripts ) {
 			return null;
 		}
-		$html = wp_remote_retrieve_body( $home );
 
-		preg_match_all( '/<script[^>]+src=["\']([^"\']+)["\']/i', $html, $matches );
-		$script_urls = array();
-		foreach ( $matches[1] as $src ) {
-			// Normalise relative forms first (protocol-relative "//host/x",
-			// root-relative "/path") so the check below sees a real URL.
-			if ( 0 === strpos( $src, '//' ) ) {
-				$src = 'https:' . $src;
-			} elseif ( 0 === strpos( $src, '/' ) ) {
-				$src = 'https://fountain.fm' . $src;
-			}
-
-			// Exact host match (apex or subdomain), HTTPS only. The previous
-			// substring check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
-			// sending this server after whatever such a page declared. The
-			// scheme check keeps a cleartext http:// chunk - modifiable in
-			// transit - from supplying a next-action value this plugin then
-			// persists via update_option().
-			$host    = wp_parse_url( $src, PHP_URL_HOST );
-			$scheme  = wp_parse_url( $src, PHP_URL_SCHEME );
-			$trusted = $scheme && 'https' === strtolower( $scheme )
-				&& $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
-
-			if ( $trusted && false !== strpos( $src, '_next' ) ) {
-				$script_urls[] = $src;
-			}
-		}
-		$script_urls = array_slice( array_unique( $script_urls ), 0, 20 );
+		// Scan order: chunks the search page references and the homepage
+		// does NOT first - that delta is where the action registration
+		// lives now - then the homepage's historic first 20 as fallback
+		// (both caps keep a chunk-storm from turning this into a
+		// full-site crawl; the 15-minute throttle bounds it anyway). A
+		// failed seed just contributes an empty list, so either page
+		// alone still yields a sane scan (homepage-only exactly matches
+		// the pre-2026 behaviour as a floor).
+		$search_scripts = isset( $seed_scripts['https://fountain.fm/search'] )
+			? $seed_scripts['https://fountain.fm/search']
+			: array();
+		$home_scripts   = isset( $seed_scripts['https://fountain.fm/'] )
+			? $seed_scripts['https://fountain.fm/']
+			: array();
+		$script_urls = array_merge(
+			array_slice( array_values( array_diff( $search_scripts, $home_scripts ) ), 0, 20 ),
+			array_slice( $home_scripts, 0, 20 )
+		);
 
 		foreach ( $script_urls as $script_url ) {
 			$response = wp_remote_get( $script_url, array(
@@ -2419,15 +2512,22 @@ JS;
 	 * chunk in the stream, this instead searches for its distinctive
 	 * "N:{"hits":" marker anywhere in the body (no line-start assumption)
 	 * and takes everything from there to the end as the JSON payload.
+	 * Also maintains last_fountain_hits_parsed so
+	 * fountain_negative_cache_ttl() can tell a readable (even if empty)
+	 * answer from a body we couldn't understand.
 	 */
 	private function extract_fountain_hit( $raw_body, $target_guid ) {
+		$this->last_fountain_hits_parsed = false;
 		if ( ! preg_match( '/\d+:(\{"hits":.*)/s', (string) $raw_body, $matches ) ) {
 			return null;
 		}
 		$decoded = json_decode( trim( $matches[1] ), true );
-		if ( empty( $decoded['hits'] ) || ! is_array( $decoded['hits'] ) ) {
+		if ( ! is_array( $decoded ) || ! isset( $decoded['hits'] ) || ! is_array( $decoded['hits'] ) ) {
 			return null;
 		}
+		// Past this point the answer is readable even if empty: a hits
+		// array without our guid is a trustworthy "no match".
+		$this->last_fountain_hits_parsed = true;
 		foreach ( $decoded['hits'] as $hit ) {
 			if ( isset( $hit['_guid'], $hit['_id'] ) && $hit['_guid'] === $target_guid ) {
 				return array(
