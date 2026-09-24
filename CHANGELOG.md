@@ -3,6 +3,17 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.15] - 2026-09-24
+
+### Security
+- **Search endpoint is rate-limited per client**: `ajax_search` now allows at most 30 requests per minute per IP before answering `429`, closing an amplification vector - the endpoint's nonce is printed on every page carrying the shortcode, so it only proved a request came from *a* page, and nothing previously bounded how many upstream Music Index batches (plus one detail lookup per result) a single client could trigger. The budget is a sliding window held in a transient keyed on `REMOTE_ADDR` only (never `X-Forwarded-For`, which a client can spoof to mint a fresh bucket): each allowed request resets the 60-second counter, while requests over the cap are rejected *without* advancing it, so hammering never extends the block - a quiet client gets its full budget back 60 s after its last allowed request and a shared/NAT address can never be locked out permanently. The guard runs after the empty-query early return, so no-op polls never spend budget, and the UI already surfaces a non-200 as "Search failed", so no script change was needed.
+- **Fountain script discovery requires HTTPS**: `fountain_autodetect_next_action()` now rejects any `src` whose scheme is not `https` (previously the scheme was never checked - only the exact-host comparison). A cleartext `http://` response, modifiable in transit, can no longer supply a `next-action` value that would be persisted to the options table via `update_option()`.
+
+## Resolver (v4v-musiclink) — [1.22.9] - 2026-09-24
+
+### Security
+- **Fountain script discovery requires HTTPS**: `fountain_autodetect_next_action()` now rejects any `src` whose scheme is not `https` (previously the scheme was never checked - only the exact-host comparison). A cleartext `http://` response, modifiable in transit, can no longer supply a `next-action` value that would be persisted to the options table via `update_option()`.
+
 ## Resolver Pro (v4v-musiclink-pro) — [1.20.14] - 2026-09-23
 
 ### Added

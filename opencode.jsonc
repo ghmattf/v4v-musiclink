@@ -1,0 +1,29 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // `archive/` directories hold version-history backup copies written by
+  // bump-version.sh. They are NOT part of the active project - agents must
+  // not open, search, or modify them (they are deliberately stale and often
+  // contain already-patched issues). See AGENTS.md.
+  //
+  // Note: `glob` and `grep` permissions are matched against the *pattern* /
+  // *regex*, not a path, so they cannot be path-scoped here. AGENTS.md carries
+  // the instruction to filter archive/ out of search results; `read` below
+  // blocks opening any file that slips through.
+  "permissions": [
+    { "action": "read", "resource": "*/archive", "effect": "deny" },
+    { "action": "read", "resource": "*/archive/*", "effect": "deny" },
+    { "action": "edit", "resource": "*/archive/*", "effect": "deny" },
+    // Shell is the one way around the `read` deny (`cat`/`sed`/`diff`), so block
+    // any command whose text references archives at all. Coarse by design; if a
+    // legitimate maintenance command ever needs it, narrow this rule instead of
+    // removing it.
+    { "action": "shell", "resource": "*archive*", "effect": "deny" }
+  ],
+
+  // Archive copies are rewritten on every version bump; that churn is not
+  // project activity and should not surface as file-change events.
+  "watcher": {
+    "ignore": ["**/archive/**"]
+  }
+}

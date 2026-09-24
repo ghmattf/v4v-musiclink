@@ -52,7 +52,7 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
 
 `bump-version.sh` creates these copies automatically.
 
-> **Note:** git tags are the authoritative record of any past release; the `archive/` copies are kept as a plain-file backup per the original build instructions. Retrieve any past version with:
+> **Note:** git tags are the authoritative record of any past release; the `archive/` copies are kept as a plain-file backup per the original build instructions. They are **out of scope for review** — exclude `archive/` from linting, searches, audits, and reports (agents: see `AGENTS.md`, which OpenCode enforces via `opencode.jsonc`). Retrieve any past version with:
 > ```bash
 > git show v1.22.1:v4v-musiclink/v4v-musiclink.php
 > ```

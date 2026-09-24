@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.14
+ * Version: 1.20.15
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1255,7 +1255,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.14', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.15', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2066,6 +2066,45 @@ JS;
 	}
 
 	/**
+	 * Per-client rate limit for the public (nopriv) AJAX endpoints.
+	 *
+	 * Their nonces are printed on every page containing the shortcode, so they
+	 * only prove a request came from a real page - not who is asking. Without
+	 * a budget, a single client could loop the search relay (up to
+	 * SEARCH_MAX_BATCHES upstream batches plus one detail lookup per result
+	 * for every call) and turn this site into a request amplifier.
+	 *
+	 * Semantics - sliding window, counted requests only:
+	 *  - Each allowed request resets the counter's TTL to $window, so a quiet
+	 *    client gets its full budget back $window seconds after its last
+	 *    allowed request.
+	 *  - Requests over the cap are rejected WITHOUT advancing the counter, so
+	 *    hammering never extends the block: the sustained ceiling is exactly
+	 *    $max allowed requests per $window, and a shared/NAT address can never
+	 *    be locked out permanently.
+	 *
+	 * Keyed on REMOTE_ADDR only - never X-Forwarded-For, which any client can
+	 * spoof to mint itself a fresh bucket.
+	 *
+	 * @param string $bucket Namespace so separate endpoints don't share a budget.
+	 * @param int    $max    Allowed requests per window.
+	 * @param int    $window Window length in seconds.
+	 * @return bool True when over budget - the caller should reject.
+	 */
+	private function is_rate_limited( $bucket, $max, $window ) {
+		$ip   = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : 'unknown';
+		$key  = 'v4v_rl_' . md5( $bucket . '|' . $ip );
+		$hits = (int) get_transient( $key );
+
+		if ( $hits >= $max ) {
+			return true;
+		}
+
+		set_transient( $key, $hits + 1, $window );
+		return false;
+	}
+
+	/**
 	 * AJAX handler backing the search box: queries Music Index's /search
 	 * endpoint, then resolves each hit's title/artist (search results only
 	 * contain guids, not display text) before returning results to the
@@ -2093,6 +2132,12 @@ JS;
 
 		if ( '' === $query ) {
 			wp_send_json_success( $payload );
+		}
+
+		// Bound the upstream relay per client before it can spend any
+		// outbound requests - see is_rate_limited() for the window semantics.
+		if ( $this->is_rate_limited( 'search', 30, MINUTE_IN_SECONDS ) ) {
+			wp_send_json_error( null, 429 );
 		}
 
 		$offset = ( $page - 1 ) * $per_page;
@@ -2305,11 +2350,16 @@ JS;
 				$src = 'https://fountain.fm' . $src;
 			}
 
-			// Exact host match (apex or subdomain). The previous substring
-			// check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
-			// sending this server after whatever such a page declared.
+			// Exact host match (apex or subdomain), HTTPS only. The previous
+			// substring check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
+			// sending this server after whatever such a page declared. The
+			// scheme check keeps a cleartext http:// chunk - modifiable in
+			// transit - from supplying a next-action value this plugin then
+			// persists via update_option().
 			$host    = wp_parse_url( $src, PHP_URL_HOST );
-			$trusted = $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
+			$scheme  = wp_parse_url( $src, PHP_URL_SCHEME );
+			$trusted = $scheme && 'https' === strtolower( $scheme )
+				&& $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
 
 			if ( $trusted && false !== strpos( $src, '_next' ) ) {
 				$script_urls[] = $src;

@@ -21,6 +21,59 @@ cd "$(dirname "$0")"
 PHP_VERSION="8.5.8"
 BASE_URL="https://dl.static-php.dev/static-php-cli/common"
 
+# --- Supply-chain: verify before we extract -------------------------------
+# SHA-256 pins for every tarball the OS/arch mapping below can produce. The
+# hashes live HERE, in tracked source, so neither a tampered local cache nor
+# swapped bytes on the download host can ever reach `tar`: verification fails
+# closed for any tarball without a pin (including after a PHP_VERSION bump,
+# which changes the bytes - re-pin at the same time).
+# Regenerate one with:
+#   curl -fsSL "${BASE_URL}/<tarball>" | sha256sum
+pinned_sha256() {
+	case "$1" in
+		php-8.5.8-cli-linux-x86_64.tar.gz)  echo "517a18e0f0874de35669fe134eb3c52508e128a6d1da5bf890760cb800ada410" ;;
+		php-8.5.8-cli-linux-aarch64.tar.gz) echo "af995ef6b3187b39932a00714dfb97e44bfa40a9243c4c29f61f19d583950753" ;;
+		php-8.5.8-cli-macos-x86_64.tar.gz)  echo "05751000c6643f82e8377ed19d55bc159f84bbed46ace1fcc6f62be9866c787c" ;;
+		php-8.5.8-cli-macos-aarch64.tar.gz) echo "cba9bd8b38b51ef2c7cebf02af689e4481bbd07f65edc0b63d3a43b04e0c9db7" ;;
+		*) return 1 ;;
+	esac
+}
+
+# GNU coreutils first, macOS shasum as the fallback - both print lowercase hex.
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | cut -d' ' -f1
+	else
+		echo "ERROR: need 'sha256sum' or 'shasum' to verify the PHP tarball" >&2
+		exit 1
+	fi
+}
+
+verify_tarball() {
+	local tarball="$1" expected actual
+
+	if ! expected="$(pinned_sha256 "$tarball")"; then
+		echo "ERROR: no SHA-256 pin exists for ${tarball}" >&2
+		echo "       Refusing to extract unverified bytes. Pin it in" >&2
+		echo "       pinned_sha256():  curl -fsSL \"\${BASE_URL}/${tarball}\" | sha256sum" >&2
+		exit 1
+	fi
+
+	actual="$(sha256_of "$tarball")"
+
+	if [ "$actual" != "$expected" ]; then
+		echo "ERROR: SHA-256 mismatch for ${tarball}" >&2
+		echo "       expected ${expected}" >&2
+		echo "       got      ${actual}" >&2
+		echo "       The file is corrupt or tampered with - delete it and re-run." >&2
+		exit 1
+	fi
+
+	echo "Verified ${tarball} (SHA-256 matches)"
+}
+
 # Already present and runnable for this platform? Nothing to do.
 if [ -x ./php ] && ./php -v >/dev/null 2>&1; then
 	echo "PHP CLI already installed: $(./php -v | head -1)"
@@ -48,6 +101,9 @@ if [ ! -f "$tarball" ]; then
 	echo "Downloading ${tarball} ..."
 	curl -fsSL --retry 3 -o "$tarball" "${BASE_URL}/${tarball}"
 fi
+
+# Never hand unverified bytes to tar.
+verify_tarball "$tarball"
 
 echo "Extracting ${tarball} ..."
 rm -f ./php

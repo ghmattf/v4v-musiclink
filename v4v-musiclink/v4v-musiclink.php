@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.8
+ * Version: 1.22.9
  * Author: Matt Finlay
  *
  * USAGE:
@@ -469,7 +469,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.8', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.9', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -957,11 +957,16 @@ JS;
 				$src = 'https://fountain.fm' . $src;
 			}
 
-			// Exact host match (apex or subdomain). The previous substring
-			// check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
-			// sending this server after whatever such a page declared.
+			// Exact host match (apex or subdomain), HTTPS only. The previous
+			// substring check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
+			// sending this server after whatever such a page declared. The
+			// scheme check keeps a cleartext http:// chunk - modifiable in
+			// transit - from supplying a next-action value this plugin then
+			// persists via update_option().
 			$host    = wp_parse_url( $src, PHP_URL_HOST );
-			$trusted = $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
+			$scheme  = wp_parse_url( $src, PHP_URL_SCHEME );
+			$trusted = $scheme && 'https' === strtolower( $scheme )
+				&& $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
 
 			if ( $trusted && false !== strpos( $src, '_next' ) ) {
 				$script_urls[] = $src;
