@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.13
+ * Version: 1.22.14
  * Author: Matt Finlay
  *
  * USAGE:
@@ -501,7 +501,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.13', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.14', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -660,6 +660,18 @@ JS;
 		);
 	}
 
+	/**
+	 * Length-only guard for guids at intake (#3): anything over 256 bytes
+	 * is dropped and behaves exactly like an absent guid (the "Missing
+	 * parameter(s)" message), before it can reach an API lookup or an
+	 * outbound app URL. Deliberately NO charset whitelist - Music Index
+	 * ids are free-form (e.g. track_01-they're-right!) - so only size is
+	 * bounded. Same contract as the Pro plugin's guard_guid().
+	 */
+	private function guard_guid( $guid ) {
+		return strlen( $guid ) <= 256 ? $guid : '';
+	}
+
 	public function render( $atts ) {
 		$raw_atts   = is_array( $atts ) ? $atts : array();
 		$unexpected = array_diff( array_keys( $raw_atts ), array( 'album', 'track', 'header' ) );
@@ -673,8 +685,12 @@ JS;
 		// An unexpected attribute name means we ignore ALL attributes and
 		// treat this exactly like a bare [musiclink] with nothing supplied,
 		// rather than guessing at which of the given attributes to trust.
-		$album = ( empty( $unexpected ) && $atts['album'] ) ? sanitize_text_field( $atts['album'] ) : '';
-		$track = ( empty( $unexpected ) && $atts['track'] ) ? sanitize_text_field( $atts['track'] ) : '';
+		$album = ( empty( $unexpected ) && $atts['album'] )
+			? $this->guard_guid( sanitize_text_field( $atts['album'] ) )
+			: '';
+		$track = ( empty( $unexpected ) && $atts['track'] )
+			? $this->guard_guid( sanitize_text_field( $atts['track'] ) )
+			: '';
 
 		// Optional per-placement override of the admin "Release header"
 		// setting; empty (not supplied) falls back to that setting.

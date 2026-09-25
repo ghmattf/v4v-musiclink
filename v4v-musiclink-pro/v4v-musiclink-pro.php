@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.19
+ * Version: 1.20.20
  * Author: Matt Finlay
  *
  * USAGE:
@@ -239,7 +239,7 @@ class V4V_Music_Link_Resolver_Pro {
 		if ( ! $post instanceof WP_Post || ! has_shortcode( $post->post_content, 'musiclink_pro' ) ) {
 			return $title;
 		}
-		$album = isset( $_GET['album'] ) ? sanitize_text_field( wp_unslash( $_GET['album'] ) ) : '';
+		$album = $this->get_guid_arg( 'album' );
 		if ( ! $album ) {
 			return $title; // Bare search page - leave WordPress's normal title alone.
 		}
@@ -405,8 +405,8 @@ class V4V_Music_Link_Resolver_Pro {
 			wp_send_json_error( null, 429 );
 		}
 
-		$album = isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '';
-		$track = isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '';
+		$album = $this->guard_guid( isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '' );
+		$track = $this->guard_guid( isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '' );
 
 		if ( ! $album ) {
 			wp_send_json_error( null, 400 );
@@ -442,8 +442,8 @@ class V4V_Music_Link_Resolver_Pro {
 			wp_send_json_error( null, 429 );
 		}
 
-		$album    = isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '';
-		$track    = isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '';
+		$album    = $this->guard_guid( isset( $_POST['album'] ) ? sanitize_text_field( wp_unslash( $_POST['album'] ) ) : '' );
+		$track    = $this->guard_guid( isset( $_POST['track'] ) ? sanitize_text_field( wp_unslash( $_POST['track'] ) ) : '' );
 		$app      = isset( $_POST['app'] ) ? sanitize_key( wp_unslash( $_POST['app'] ) ) : '';
 		$registry = $this->app_registry();
 
@@ -478,6 +478,25 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
+	 * Length-only guard for guids at intake (#3): anything over 256 bytes
+	 * is dropped and behaves exactly like an absent guid, before it can
+	 * reach an API lookup, an outbound app URL, the canonical/og tags or
+	 * the log. Deliberately NO charset whitelist - Music Index ids are
+	 * free-form (e.g. track_01-they're-right!) - so only size is bounded.
+	 */
+	private function guard_guid( $guid ) {
+		return strlen( $guid ) <= 256 ? $guid : '';
+	}
+
+	/**
+	 * The single read path for guid query args: unslash, sanitise, guard.
+	 */
+	private function get_guid_arg( $key ) {
+		$raw = isset( $_GET[ $key ] ) ? wp_unslash( $_GET[ $key ] ) : '';
+		return $this->guard_guid( sanitize_text_field( $raw ) );
+	}
+
+	/**
 	 * This page's canonical URL: the request path plus the sanitised
 	 * album/track args, and nothing else.
 	 *
@@ -485,21 +504,31 @@ class V4V_Music_Link_Resolver_Pro {
 	 * REQUEST_URI (add_query_arg( null, null )) into the get_canonical_url
 	 * filter or the buffer rewrite hands consumers every other -
 	 * attacker-supplied - query arg, and not all of them escape on output.
-	 * Rebuilding also drops junk args, so both producers of the canonical
-	 * tag (this filter and rewrite_canonical_in_html()) agree on one URL.
+	 * Rebuilding also drops junk args, so every producer of this page's URL
+	 * - the get_canonical_url filter, the buffer rewrite, og:url in both
+	 * social-preview modes, and the Share button - agrees on one URL.
+	 *
+	 * Returned UNESCAPED: consumers escape once at their own output (core's
+	 * rel_canonical() applies esc_url, this plugin's output sites apply
+	 * esc_url). Pre-escaping here made the escaping count depend on which
+	 * consumer received the value - the get_canonical_url filter result
+	 * used to be esc_url'd a second time downstream.
 	 */
 	private function musiclink_canonical_url() {
+		$album = $this->get_guid_arg( 'album' );
+		$track = $this->get_guid_arg( 'track' );
+
 		$args = array();
-		if ( ! empty( $_GET['album'] ) ) {
-			$args['album'] = sanitize_text_field( wp_unslash( $_GET['album'] ) );
+		if ( $album ) {
+			$args['album'] = $album;
 		}
-		if ( ! empty( $_GET['track'] ) ) {
-			$args['track'] = sanitize_text_field( wp_unslash( $_GET['track'] ) );
+		if ( $track ) {
+			$args['track'] = $track;
 		}
 
 		$path = explode( '?', add_query_arg( null, null ), 2 )[0];
 
-		return esc_url( home_url( add_query_arg( $args, $path ) ) );
+		return home_url( add_query_arg( $args, $path ) );
 	}
 
 	public function rewrite_canonical_in_html( $html ) {
@@ -512,7 +541,7 @@ class V4V_Music_Link_Resolver_Pro {
 		return preg_replace_callback(
 			'/(<link[^>]+rel=["\']canonical["\'][^>]+href=["\'])[^"\']*(["\'][^>]*>)/i',
 			function ( $matches ) use ( $correct_url ) {
-				return $matches[1] . $correct_url . $matches[2];
+				return $matches[1] . esc_url( $correct_url ) . $matches[2];
 			},
 			$html,
 			1
@@ -536,7 +565,7 @@ class V4V_Music_Link_Resolver_Pro {
 	public function rewrite_all_meta_in_html( $html ) {
 		global $post;
 		$fields      = $this->compute_preview_fields( $post );
-		$current_url = home_url( add_query_arg( null, null ) );
+		$current_url = $this->musiclink_canonical_url();
 
 		$html = $this->rewrite_canonical_in_html( $html );
 
@@ -545,7 +574,7 @@ class V4V_Music_Link_Resolver_Pro {
 		// Open Graph tags (confirmed via a real screenshot). Only touches
 		// it when a guid is present and resolved; the bare search page
 		// keeps its normal WordPress title.
-		$album = isset( $_GET['album'] ) ? sanitize_text_field( wp_unslash( $_GET['album'] ) ) : '';
+		$album = $this->get_guid_arg( 'album' );
 		if ( $album && $fields['title'] ) {
 			// Callback so a "$0" / "$1" in a release title is never expanded
 			// as a backreference (that would re-insert the raw old <title>
@@ -1539,7 +1568,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.19', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.20', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -1946,8 +1975,8 @@ JS;
 	 * in how they get the tags into the page.
 	 */
 	private function compute_preview_fields( $post ) {
-		$album = isset( $_GET['album'] ) ? sanitize_text_field( wp_unslash( $_GET['album'] ) ) : '';
-		$track = isset( $_GET['track'] ) ? sanitize_text_field( wp_unslash( $_GET['track'] ) ) : '';
+		$album = $this->get_guid_arg( 'album' );
+		$track = $this->get_guid_arg( 'track' );
 
 		if ( $album ) {
 			$has_track = ! empty( $track );
@@ -1995,7 +2024,7 @@ JS;
 		}
 
 		$fields      = $this->compute_preview_fields( $post );
-		$current_url = home_url( add_query_arg( null, null ) );
+		$current_url = $this->musiclink_canonical_url();
 
 		$this->render_meta_tags( $fields['title'], $fields['description'], $fields['image'], $fields['type'], $current_url, $fields['site_name'] );
 	}
@@ -2077,11 +2106,11 @@ JS;
 		// inline in post content) take priority over the URL's query string
 		// (used by the shareable /musiclink page).
 		$album = $atts['album']
-			? sanitize_text_field( $atts['album'] )
-			: ( isset( $_GET['album'] ) ? sanitize_text_field( wp_unslash( $_GET['album'] ) ) : '' );
+			? $this->guard_guid( sanitize_text_field( $atts['album'] ) )
+			: $this->get_guid_arg( 'album' );
 		$track = $atts['track']
-			? sanitize_text_field( $atts['track'] )
-			: ( isset( $_GET['track'] ) ? sanitize_text_field( wp_unslash( $_GET['track'] ) ) : '' );
+			? $this->guard_guid( sanitize_text_field( $atts['track'] ) )
+			: $this->get_guid_arg( 'track' );
 
 		// Optional per-placement override of the admin "Release header"
 		// setting; empty (not supplied) falls back to that setting.
@@ -2958,7 +2987,7 @@ JS;
 			? sprintf( '"%s" from %s', $track_title, $album_title )
 			: $album_title;
 
-		$current_url = home_url( add_query_arg( null, null ) );
+		$current_url = $this->musiclink_canonical_url();
 
 		ob_start();
 		?>

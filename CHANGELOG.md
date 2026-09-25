@@ -3,6 +3,19 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.14] - 2026-09-25
+
+### Security
+- **Shortcode `album`/`track` attributes now have a length cap at intake**: a guid longer than 256 bytes is dropped and treated as absent (the shared "Missing parameter(s)" block renders) instead of flowing on to Music Index lookups and the outbound app URLs, so a page embedding a pathological attribute can no longer make the server chase an unbounded request. The guard is deliberately **length-only — no charset whitelist**: Music Index ids are free-form (e.g. `track_01-they're-right!`) and continue to pass through verbatim, verified by the new harness alongside the cap itself. Pro ships the identical guard (`v4v-musiclink-pro` 1.20.20).
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.20] - 2026-09-25
+
+### Changed
+- **og:url (both social-preview modes) and the Share button now build from the sanitized canonical URL instead of the raw request URI**: previously all three emitted `home_url( add_query_arg( null, null ) )`, handing every attacker-supplied query arg to crawler-facing tags and shared links (and letting those three URLs disagree with the canonical tag, which was already rebuilt from album/track only). All four producers of this page's URL — the `get_canonical_url` filter, the `rel="canonical"` buffer rewrite, og:url in plugin-only *and* entire-site mode, and the Share button's `data-url` — now agree on `musiclink_canonical_url()`: request path + sanitized `album`/`track` args and nothing else. The helper also now returns the URL **unescaped**, with each output site escaping exactly once at its own echo: its value used to arrive pre-escaped and be `esc_url()`'d a second time by core's `rel_canonical()`/SEO plugins — harmless only because `esc_url()` is entity-idempotent, but the escaping count is now correct by construction instead of by luck.
+
+### Security
+- **Guids have a length cap at every intake point** (same contract as 1.22.14): the URL query args read by the render, social-preview, document-title and canonical paths, the shortcode attributes, and both log-beacon POST bodies now drop anything over 256 bytes as if the guid were absent — before any Music Index lookup, outbound app URL, or log write. Deliberately length-only: no charset whitelist, so free-form Music Index ids (e.g. `track_01-they're-right!`) pass through untouched end to end, from URL to render to beacon to log row.
+
 ## Resolver (v4v-musiclink) — [1.22.13] - 2026-09-25
 
 ### Added
