@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.20
+ * Version: 1.20.21
  * Author: Matt Finlay
  *
  * USAGE:
@@ -299,10 +299,13 @@ class V4V_Music_Link_Resolver_Pro {
 	 * button launch. Only titles resolved from Music Index are stored; the
 	 * album/track guids that drove the row never are. Called only from the
 	 * two beacon handlers (ajax_log_open, ajax_log_app) - page renders
-	 * never log, from any source - and logged unconditionally on every
-	 * qualifying row, not deduplicated per visitor/session. After the
-	 * insert, at most once per hour, the table is pruned back to
-	 * log_max_rows() newest rows so retention stays bounded.
+	 * never log, from any source - and logged on every qualifying row,
+	 * not deduplicated per visitor/session. The admin logging switch
+	 * (logging_enabled(), default on) is checked here as the write-path
+	 * choke point, and earlier still in both beacon handlers so a
+	 * disabled switch spends no rate-limit budget and no upstream
+	 * resolution. After the insert, at most once per hour, the table is
+	 * pruned back to log_max_rows() newest rows so retention stays bounded.
 	 *
 	 * @param string $artist      Resolved artist title.
 	 * @param string $album_title Resolved album title.
@@ -310,6 +313,10 @@ class V4V_Music_Link_Resolver_Pro {
 	 * @param string $app         Launched app slug, or '' for an open.
 	 */
 	private function log_view( $artist, $album_title, $track_title, $app = '' ) {
+		if ( ! $this->logging_enabled() ) {
+			return;
+		}
+
 		global $wpdb;
 		$wpdb->insert(
 			$wpdb->prefix . 'v4v_musiclink_pro_log',
@@ -385,6 +392,20 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
+	 * Whether interaction logging is on. Admin switch stored as '1'/'0'
+	 * (settings checkbox, default on): the stored value is only ever '0'
+	 * when the admin has explicitly opted out, so an absent option - every
+	 * site that never opened the settings - keeps logging exactly as
+	 * before. Read in both beacon handlers before any budget or upstream
+	 * work, and again in log_view() as the write-path choke point.
+	 *
+	 * @return bool True when the log beacons may record events.
+	 */
+	private function logging_enabled() {
+		return (bool) get_option( 'v4v_musiclink_pro_log_enabled', 1 );
+	}
+
+	/**
 	 * AJAX beacon fired when a visitor picks a result on the search page -
 	 * the click that generates the shareable URL. This is the only thing
 	 * that logs an "open": the render it navigates to (and any later view
@@ -398,6 +419,14 @@ class V4V_Music_Link_Resolver_Pro {
 		// Same nonce action as the launch beacon - one "log write" token
 		// family, so already-cached pages keep verifying after upgrade.
 		check_ajax_referer( 'v4v_musiclink_pro_log_app', 'nonce' );
+
+		// Admin logging switch off: acknowledge and do nothing - no
+		// rate-limit budget spent, no Music Index lookup, no row. The
+		// client is fire-and-forget sendBeacon, and a deliberately
+		// disabled feature is not a failure, so this answers success.
+		if ( ! $this->logging_enabled() ) {
+			wp_send_json_success();
+		}
 
 		// Bound the write path before it spends any upstream work - see
 		// is_rate_limited() for the window semantics.
@@ -434,6 +463,14 @@ class V4V_Music_Link_Resolver_Pro {
 	 */
 	public function ajax_log_app() {
 		check_ajax_referer( 'v4v_musiclink_pro_log_app', 'nonce' );
+
+		// Admin logging switch off: acknowledge and do nothing - no
+		// rate-limit budget spent, no Music Index lookup, no row. The
+		// client is fire-and-forget sendBeacon, and a deliberately
+		// disabled feature is not a failure, so this answers success.
+		if ( ! $this->logging_enabled() ) {
+			wp_send_json_success();
+		}
 
 		// Bound the write path before it spends any upstream work - see
 		// is_rate_limited() for the window semantics. Own budget, so
@@ -1043,6 +1080,11 @@ class V4V_Music_Link_Resolver_Pro {
 			'sanitize_callback' => array( $this, 'sanitize_log_max_rows' ),
 			'default'           => 100000,
 		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_log_enabled', array(
+			'type'              => 'boolean',
+			'sanitize_callback' => 'rest_sanitize_boolean',
+			'default'           => true,
+		) );
 	}
 
 	/**
@@ -1485,6 +1527,32 @@ class V4V_Music_Link_Resolver_Pro {
 					</tr>
 					<tr>
 						<th scope="row">
+							<label for="v4v_musiclink_pro_log_enabled"><?php esc_html_e( 'Log interactions', 'v4v-musiclink-pro' ); ?></label>
+						</th>
+						<td>
+							<input type="hidden" name="v4v_musiclink_pro_log_enabled" value="0" />
+							<input
+								type="checkbox"
+								id="v4v_musiclink_pro_log_enabled"
+								name="v4v_musiclink_pro_log_enabled"
+								value="1"
+								<?php checked( $this->logging_enabled() ); ?>
+							/>
+							<label for="v4v_musiclink_pro_log_enabled">
+								<?php esc_html_e( 'Record search-result opens and app-button launches (View Log and Reports tabs).', 'v4v-musiclink-pro' ); ?>
+							</label>
+							<p class="description">
+								<?php
+								esc_html_e(
+									'Enabled by default. A row stores only the resolved artist, album, track, app and timestamp - never an IP address or anything sent from the page - and page renders are never logged. Turning this off stops all new rows: the beacons acknowledge without writing anything (no rate-limit budget is spent and nothing is sent to Music Index); existing rows stay until you press Clear log or the row cap prunes them. The rate and row-cap settings below apply only while this is on.',
+									'v4v-musiclink-pro'
+								);
+								?>
+							</p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
 							<label for="v4v_musiclink_pro_log_app_rate"><?php esc_html_e( 'App-launch log rate (per minute, per IP)', 'v4v-musiclink-pro' ); ?></label>
 						</th>
 						<td>
@@ -1568,7 +1636,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.20', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.21', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2069,10 +2137,16 @@ JS;
 
 	/**
 	 * Live favicon URL for a given domain - avoids storing/reproducing any
-	 * app's logo assets ourselves.
+	 * app's logo assets ourselves, and keeps the visitor's browser from
+	 * contacting any third party (this used to proxy through Google's
+	 * favicon service). The icon is read straight off the app's own
+	 * domain: every app serves the conventional /favicon.ico except
+	 * PodTunes, which serves favicon.png (verified 2026-09-25 - its
+	 * /favicon.ico 404s).
 	 */
 	private function favicon_url( $domain ) {
-		return 'https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode( $domain );
+		$path = ( 'podtunes.app' === $domain ) ? '/favicon.png' : '/favicon.ico';
+		return 'https://' . $domain . $path;
 	}
 
 	/**

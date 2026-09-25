@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.14
+ * Version: 1.22.15
  * Author: Matt Finlay
  *
  * USAGE:
@@ -501,7 +501,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.14', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.15', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -634,10 +634,16 @@ JS;
 
 	/**
 	 * Live favicon URL for a given domain - avoids storing/reproducing any
-	 * app's logo assets ourselves.
+	 * app's logo assets ourselves, and keeps the visitor's browser from
+	 * contacting any third party (this used to proxy through Google's
+	 * favicon service). The icon is read straight off the app's own
+	 * domain: every app serves the conventional /favicon.ico except
+	 * PodTunes, which serves favicon.png (verified 2026-09-25 - its
+	 * /favicon.ico 404s).
 	 */
 	private function favicon_url( $domain ) {
-		return 'https://www.google.com/s2/favicons?sz=128&domain=' . rawurlencode( $domain );
+		$path = ( 'podtunes.app' === $domain ) ? '/favicon.png' : '/favicon.ico';
+		return 'https://' . $domain . $path;
 	}
 
 	/**

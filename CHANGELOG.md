@@ -3,6 +3,19 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.15] - 2026-09-25
+
+### Changed
+- **App-button favicons now come from each app's own domain — Google's favicon proxy is gone**: the icon URL used to be built as `https://www.google.com/s2/favicons?sz=128&domain=…`, so *every page view* rendering a widget made the visitor's browser contact Google, leaking their IP and the page they were reading to a third party. `favicon_url()` — the single source both plugins route their icons through — now returns the app's own icon: `https://stablekraft.app/favicon.ico`, `https://podtunes.app/favicon.png` (PodTunes serves its icon as a PNG and 404s the `.ico` — verified 2026-09-25), `https://v4vmusic.com/favicon.ico` and `https://fountain.fm/favicon.ico` (the other three verified serving 200s). No third-party favicon contact remains in either plugin; the og:image fallback keeps using the site's own logo/site icon, and admin-set per-app icon overrides are untouched. Shipped identically in `v4v-musiclink-pro` 1.20.21; the harness now asserts all four URLs in rendered output for both plugins and that no `google.com/s2` reference survives anywhere.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.21] - 2026-09-25
+
+### Added
+- **A "Log interactions" setting — enabled by default — now gates all log writing**: the new Settings → V4V MusicLink Pro checkbox (`v4v_musiclink_pro_log_enabled`) is honored by both beacons and by `log_view()` itself. When it is off, `ajax_log_open()`/`ajax_log_app()` answer `success` immediately: **no log row, no rate-limit budget consumed, and no Music Index lookup** (the client is fire-and-forget `sendBeacon`, and a deliberately disabled feature is not a failure), and `log_view()` refuses too as the write-path choke point for any future caller, so retention work can't run either. The nonce still authenticates first — the endpoints' auth contract is unchanged. The option is stored `'1'`/`'0'` and read as **absent = enabled**, so every existing site and every fresh install keeps logging exactly as before until an admin explicitly unticks the box; existing rows remain until Clear log or the row cap prunes them, and the rate/row-cap settings only apply while logging is on.
+
+### Changed
+- **App-button favicons now come from each app's own domain — Google's favicon proxy is gone**: identical to Resolver 1.22.15 — every `google.com/s2` URL (which each page view resolved through Google, leaking the visitor's IP and page to a third party) is replaced by the app's own icon path (`stablekraft.app/favicon.ico`, `podtunes.app/favicon.png` — PodTunes serves a PNG and 404s the `.ico`, verified 2026-09-25 — `v4vmusic.com/favicon.ico`, `fountain.fm/favicon.ico`), all four verified live. `favicon_url()` remains the single source for both the rendered buttons and the settings-page icon previews; the og:image fallback (site logo/site icon) and admin-set icon overrides are unaffected.
+
 ## Resolver (v4v-musiclink) — [1.22.14] - 2026-09-25
 
 ### Security
