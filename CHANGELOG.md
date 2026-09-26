@@ -3,6 +3,21 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.19] - 2026-09-26
+
+### Changed
+- **The "App" field is gone from the Stored links tab — a row is now one release, and the app is expressed by which link column the row holds**: the App column, its "All apps" dropdown filter and the `app = %s` predicate are all removed, since the "Fountain.fm link" column already says which app wrote the entry. The table moved to schema version 2 to match: one row per release keyed on `sha1(album_guid|track_guid)` (previously `sha1(app|album_guid|track_guid)`), with the `app` and `url` columns replaced by a per-app link column (`fountain_url`), so **another app storing links later is a new field on the same row, not a new row**. Existing installs are migrated in place on the next load — every step guarded by the columns actually present rather than by the stored version flag, so a lost or never-written option cannot strand live rows, and an interrupted run resumes instead of failing. The resolved link is *copied*, never re-resolved (a release whose URL a page view already earned keeps it through the upgrade), rows that differed only by app collapse into the oldest, the hash is rebuilt for the new identity, and only then are `app`/`url` dropped. The handlers follow the new shape: the inline edit form posts which link field it edited, whitelisted through a new `LINK_COLUMNS` map (app slug → column) so a field name can never reach SQL; the per-app clear blanks that column across the shared rows; and `LINK_COLUMNS` is now the single place defining which apps can store a link.
+- **Display order is now Artist, Album title, Track title, Album GUID, Track GUID, Fountain.fm link, Updated, with the filter row in the same order**: the filters are built from one new `stored_link_filters()` list that the pagination/redirect URL also reads, so the form and the URL that preserves it cannot drift apart — the previously hand-maintained key list was still carrying the removed App filter and the old `url` field name, and would have silently dropped renamed filters from paginated links. Album/Track GUID are kept immediately after the titles rather than dropped: they are the row's identity and the way to find a release whose title is missing or ambiguous.
+- **The tab's opening description is now "Music apps that do not support direct access via album/track GUID can be saved here."**, replacing the paragraph that explained search/write-back/clear semantics — behaviour the per-row states and each confirmation already spell out at the moment they matter.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.25] - 2026-09-26
+
+### Added
+- **The Report tab's "Date range" gains "This month" and "Last month"** — calendar months rather than rolling windows, computed in the site's own timezone like every existing preset: from the 1st at 00:00 up to *but not including* the 1st of the following month, so "Last month" covers a whole previous month whatever its length and "This month" ends exactly where the next begins. Both sit in the picker between "Today" and the rolling windows, are in the accepted-range whitelist, and bind into the same `logged_at >= %s` / `logged_at < %s` predicates the other presets use.
+
+### Changed
+- **Identical to Resolver 1.22.19 — no App field, one row per release with a per-app link column, and the reordered columns/filters**: the App column and filter are gone (the "Fountain.fm link" column identifies the app), the table is at schema version 2 keyed on `sha1(album_guid|track_guid)` with `app`/`url` replaced by `fountain_url`, existing rows are migrated in place with the resolved link copied across and the hash rebuilt, and the edit form's field name is whitelisted through `LINK_COLUMNS`. Columns and filters both read Artist, Album title, Track title, Album GUID, Track GUID, Fountain.fm link, Updated from one shared list, and the tab description is now "Music apps that do not support direct access via album/track GUID can be saved here."
+
 ## Resolver (v4v-musiclink) — [1.22.18] - 2026-09-26
 
 ### Changed

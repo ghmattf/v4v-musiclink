@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.18
+ * Version: 1.22.19
  * Author: Matt Finlay
  *
  * USAGE:
@@ -102,8 +102,20 @@ class V4V_Music_Link_Resolver {
 	 * Stored-links table schema generation. Bump when the CREATE TABLE
 	 * changes so existing installs run dbDelta() again (see
 	 * maybe_create_stored_links_table()).
+	 *
+	 * 1 = one row per (app, release) with a single `url` column.
+	 * 2 = one row per release, `url` renamed to a column per app.
 	 */
-	const LINKS_TABLE_VERSION = 1;
+	const LINKS_TABLE_VERSION = 2;
+
+	/**
+	 * The link column each app stores its resolved URL in, keyed by app
+	 * slug. Rows are shared across apps (one per release), so another app
+	 * joining later means: its own column in CREATE TABLE plus a version
+	 * bump and a migration step, one entry in this map, and one field in
+	 * the tab - not another row.
+	 */
+	const LINK_COLUMNS = array( 'fountain' => 'fountain_url' );
 
 	/**
 	 * HTTP status of the most recent mi_api_get() call (0 = transport
@@ -529,17 +541,18 @@ class V4V_Music_Link_Resolver {
 	/* ------------------------------------------------------------------------
 	 * Stored links
 	 *
-	 * A per-release table of resolved app links (Fountain only for now; the
-	 * `app` column makes future apps rows rather than migrations). The
+	 * A table of resolved app links, one row per release: the album/track
+	 * guids are the identity, and each app that can store one owns a link
+	 * column on that row (`fountain_url` today - see LINK_COLUMNS). The
 	 * Fountain block consults it first, so once a link has been resolved it
 	 * no longer depends on Fountain's `next-action` hash, a transient, or
 	 * the background self-heal - which is exactly the chain that was
 	 * serving the plain fountain.fm homepage for 30+ minutes after a
 	 * self-heal had already succeeded.
 	 *
-	 * Rule: a row with a non-empty url is used verbatim - no search, no
+	 * Rule: a row with a non-empty link is used verbatim - no search, no
 	 * write-back - so a link corrected by hand can never be silently
-	 * reverted. A missing row, or one whose url was blanked, runs the
+	 * reverted. A missing row, or one whose link was blanked, runs the
 	 * normal search and then upserts the result.
 	 * --------------------------------------------------------------------- */
 
@@ -556,8 +569,69 @@ class V4V_Music_Link_Resolver {
 			return;
 		}
 
+		// Which columns the table actually has decides the rewrite, not
+		// the stored version: a lost or never-written option would
+		// otherwise strand every live row on the old shape.
+		self::migrate_stored_links_table();
+
 		self::create_stored_links_table();
 		update_option( 'v4v_musiclink_stored_links_table_version', self::LINKS_TABLE_VERSION );
+	}
+
+	/**
+	 * One-time v1 -> v2 rewrite of an existing table: carry the resolved
+	 * link into the per-app column, collapse any pair of rows that differed
+	 * only by app, rebuild the hash for the new row identity, then drop the
+	 * two columns v1 needed. Every step is guarded by the columns really
+	 * present, so a run interrupted half-way resumes on the next load
+	 * instead of failing, and a table that was never at v1 no-ops.
+	 *
+	 * Nothing is re-resolved here: the link is copied, so a release whose
+	 * URL a page view already earned keeps it across the upgrade.
+	 */
+	private static function migrate_stored_links_table() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'v4v_musiclink_stored_links';
+
+		$cols = $wpdb->get_col( "SHOW COLUMNS FROM {$table}" );
+		$cols = is_array( $cols ) ? $cols : array();
+
+		$has_url = in_array( 'url', $cols, true );
+		$has_app = in_array( 'app', $cols, true );
+
+		if ( ! $has_url && ! $has_app ) {
+			return;
+		}
+
+		if ( $has_url ) {
+			if ( ! in_array( 'fountain_url', $cols, true ) ) {
+				$wpdb->query( "ALTER TABLE {$table} ADD COLUMN fountain_url TEXT NOT NULL" );
+			}
+
+			$wpdb->query( "UPDATE {$table} SET fountain_url = url" );
+		}
+
+		// v1 allowed one row per (app, release); v2 is one per release, so
+		// pairs that differ only by app collapse into the oldest row. (Only
+		// Fountain has ever written rows, so in practice this changes
+		// nothing - it just keeps the unique lookup_hash satisfiable.)
+		$wpdb->query(
+			"DELETE t1 FROM {$table} t1 INNER JOIN {$table} t2
+			 ON t1.album_guid = t2.album_guid AND t1.track_guid = t2.track_guid
+			 AND t1.id > t2.id"
+		);
+
+		// The row identity lost the app, so rebuild the hash to match
+		// stored_link_hash(). Runs before the drops, while both old
+		// columns are still available for the dedupe above.
+		$wpdb->query( "UPDATE {$table} SET lookup_hash = SHA1( CONCAT( album_guid, '|', track_guid ) )" );
+
+		if ( $has_url ) {
+			$wpdb->query( "ALTER TABLE {$table} DROP COLUMN url" );
+		}
+		if ( $has_app ) {
+			$wpdb->query( "ALTER TABLE {$table} DROP COLUMN app" );
+		}
 	}
 
 	private static function create_stored_links_table() {
@@ -568,17 +642,15 @@ class V4V_Music_Link_Resolver {
 		$sql = "CREATE TABLE {$table_name} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			lookup_hash CHAR(40) NOT NULL DEFAULT '',
-			app VARCHAR(64) NOT NULL DEFAULT '',
 			album_guid VARCHAR(256) NOT NULL DEFAULT '',
 			track_guid VARCHAR(256) NOT NULL DEFAULT '',
 			album_title VARCHAR(255) NOT NULL DEFAULT '',
 			track_title VARCHAR(255) NOT NULL DEFAULT '',
 			artist VARCHAR(255) NOT NULL DEFAULT '',
-			url TEXT NOT NULL,
+			fountain_url TEXT NOT NULL,
 			updated_at DATETIME NOT NULL,
 			PRIMARY KEY  (id),
-			UNIQUE KEY lookup_hash (lookup_hash),
-			KEY app (app)
+			UNIQUE KEY lookup_hash (lookup_hash)
 		) {$charset_collate};";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -592,19 +664,20 @@ class V4V_Music_Link_Resolver {
 	}
 
 	/**
-	 * The identity of a stored link: sha1( app|album_guid|track_guid ).
+	 * The identity of a stored link: sha1( album_guid|track_guid ).
 	 *
 	 * The guids themselves are deliberately NOT part of any index.
 	 * Music Index ids are free-form and guard_guid() allows up to 256
-	 * bytes, so a composite unique index over three utf8mb4 columns can
+	 * bytes, so a composite unique index over two utf8mb4 columns can
 	 * exceed InnoDB's index byte limit on older servers - and a failed
 	 * CREATE TABLE would take the whole feature down with it. A fixed
 	 * 40-byte hash keeps the unique key (and with it the "one row per
-	 * release per app" rule) cheap and length-independent, while the raw
-	 * guids stay in plain columns for display and filtering.
+	 * release" rule) cheap and length-independent, while the raw guids
+	 * stay in plain columns for display and filtering. Apps are not part
+	 * of the identity at all: they share the row.
 	 */
-	private function stored_link_hash( $app, $album, $track ) {
-		return sha1( $app . '|' . $album . '|' . $track );
+	private function stored_link_hash( $album, $track ) {
+		return sha1( $album . '|' . $track );
 	}
 
 	/**
@@ -613,14 +686,14 @@ class V4V_Music_Link_Resolver {
 	 * the documented way to force a fresh search). Returning '' for both
 	 * cases means the caller only ever needs one branch: '' -> search.
 	 */
-	private function get_stored_link( $app, $album, $track ) {
+	private function get_stored_link( $album, $track ) {
 		global $wpdb;
 		$table = $this->stored_links_table();
 
 		$url = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT url FROM {$table} WHERE lookup_hash = %s LIMIT 1",
-				$this->stored_link_hash( $app, $album, $track )
+				"SELECT fountain_url FROM {$table} WHERE lookup_hash = %s LIMIT 1",
+				$this->stored_link_hash( $album, $track )
 			)
 		);
 
@@ -641,23 +714,22 @@ class V4V_Music_Link_Resolver {
 	 * get_date_from_gmt() would shift it by the site's GMT offset (the
 	 * display half of O3).
 	 */
-	private function store_stored_link( $app, $album, $track, $url, $album_title, $track_title, $artist ) {
+	private function store_stored_link( $album, $track, $url, $album_title, $track_title, $artist ) {
 		global $wpdb;
 		$table = $this->stored_links_table();
 
 		$wpdb->query(
 			$wpdb->prepare(
 				"INSERT INTO {$table}
-					(lookup_hash, app, album_guid, track_guid, album_title, track_title, artist, url, updated_at)
-				VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+					(lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at)
+				VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 				ON DUPLICATE KEY UPDATE
-					url = VALUES(url),
+					fountain_url = VALUES(fountain_url),
 					album_title = VALUES(album_title),
 					track_title = VALUES(track_title),
 					artist = VALUES(artist),
 					updated_at = VALUES(updated_at)",
-				$this->stored_link_hash( $app, $album, $track ),
-				$app,
+				$this->stored_link_hash( $album, $track ),
 				$album,
 				$track,
 				$album_title,
@@ -706,6 +778,29 @@ class V4V_Music_Link_Resolver {
 	}
 
 	/**
+	 * The fields the Stored links tab filters on, in display order.
+	 *
+	 * One list serves both the filter form and the URL that carries those
+	 * filters across pagination and handler redirects, so the two cannot
+	 * drift apart: the form writes `sl_` + key, the URL reads those same
+	 * keys back.
+	 */
+	private function stored_link_filters() {
+		return array(
+			// Display order: the release, then its link, then when it was
+			// last written - the table follows the same order.
+			'artist'       => __( 'Artist', 'v4v-musiclink' ),
+			'album_title'  => __( 'Album title', 'v4v-musiclink' ),
+			'track_title'  => __( 'Track title', 'v4v-musiclink' ),
+			'album_guid'   => __( 'Album GUID', 'v4v-musiclink' ),
+			'track_guid'   => __( 'Track GUID', 'v4v-musiclink' ),
+			// One key per app link column (LINK_COLUMNS), labelled for
+			// the app that owns one today.
+			'fountain_url' => __( 'Fountain.fm link', 'v4v-musiclink' ),
+		);
+	}
+
+	/**
 	 * URL of the Stored links tab, carrying any active filters so
 	 * pagination keeps the admin's current view.
 	 */
@@ -715,7 +810,8 @@ class V4V_Music_Link_Resolver {
 			'tab'  => 'links',
 		);
 
-		foreach ( array( 'sl_app', 'sl_album_guid', 'sl_track_guid', 'sl_album_title', 'sl_track_title', 'sl_artist', 'sl_url' ) as $key ) {
+		foreach ( array_keys( $this->stored_link_filters() ) as $field ) {
+			$key = 'sl_' . $field;
 			if ( ! isset( $_GET[ $key ] ) ) {
 				continue;
 			}
@@ -757,19 +853,10 @@ class V4V_Music_Link_Resolver {
 		$table    = $this->stored_links_table();
 		$per_page = 50;
 
-		// Field => column label. The keys are this method's own literals -
-		// never request data - so they are safe to interpolate into SQL.
-		$filter_fields = array(
-			'app'         => __( 'App', 'v4v-musiclink' ),
-			'album_guid'  => __( 'Album GUID', 'v4v-musiclink' ),
-			'track_guid'  => __( 'Track GUID', 'v4v-musiclink' ),
-			'album_title' => __( 'Album title', 'v4v-musiclink' ),
-			'track_title' => __( 'Track title', 'v4v-musiclink' ),
-			'artist'      => __( 'Artist', 'v4v-musiclink' ),
-			// Named for the app that writes these rows today; if a second
-			// app ever stores links, this needs to become per-app.
-			'url'         => __( 'Fountain.fm link', 'v4v-musiclink' ),
-		);
+		// Field => column label, in display order. The keys are literals
+		// from stored_link_filters() - never request data - so they are
+		// safe to interpolate into SQL.
+		$filter_fields = $this->stored_link_filters();
 
 		$filters = array();
 		foreach ( array_keys( $filter_fields ) as $field ) {
@@ -784,15 +871,11 @@ class V4V_Music_Link_Resolver {
 				continue;
 			}
 
-			if ( 'app' === $field ) {
-				// The app filter is a dropdown of exact slugs, so it
-				// matches exactly rather than as a substring.
-				$where[]  = 'app = %s';
-				$params[] = $value;
-			} else {
-				$where[]  = $field . ' LIKE %s';
-				$params[] = '%' . $wpdb->esc_like( $value ) . '%';
-			}
+			// Every filterable field is a literal column name from the map
+			// above; only its value ever reaches the query, and that goes
+			// through prepare().
+			$where[]  = $field . ' LIKE %s';
+			$params[] = '%' . $wpdb->esc_like( $value ) . '%';
 		}
 
 		$where_sql = $where ? ' WHERE ' . implode( ' AND ', $where ) : '';
@@ -807,7 +890,7 @@ class V4V_Music_Link_Resolver {
 
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT id, app, album_guid, track_guid, album_title, track_title, artist, url, updated_at
+				"SELECT id, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at
 				FROM {$table}{$where_sql}
 				ORDER BY updated_at DESC, id DESC
 				LIMIT %d OFFSET %d",
@@ -815,10 +898,9 @@ class V4V_Music_Link_Resolver {
 			)
 		);
 
-		// Apps actually present, driving both the app filter and the
-		// per-app options of the clear control.
-		$apps = $wpdb->get_col( "SELECT DISTINCT app FROM {$table} ORDER BY app ASC" );
-		$apps = is_array( $apps ) ? $apps : array();
+		// Apps that own a link column - there is no app column to read
+		// them from, since rows are shared across apps (one per release).
+		$link_apps = array_keys( self::LINK_COLUMNS );
 
 		$plain_tab_url = admin_url( 'options-general.php?page=v4v-musiclink&tab=links' );
 		?>
@@ -851,7 +933,7 @@ class V4V_Music_Link_Resolver {
 		<?php endif; ?>
 
 		<p class="description">
-			<?php esc_html_e( 'Links are stored here the first time the Fountain search resolves one for a release, together with the release details shown below. A stored link is used exactly as it stands - no search, no refresh - until you edit or remove it. Blank a link to force a fresh search on the next page view, or delete a row to start over. Clearing one app\'s links blanks them but keeps the rows; clearing all stored links removes the rows themselves. Either way, a missing link re-resolves the next time its release is viewed.', 'v4v-musiclink' ); ?>
+			<?php esc_html_e( 'Music apps that do not support direct access via album/track GUID can be saved here.', 'v4v-musiclink' ); ?>
 		</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:1em 0;">
@@ -860,16 +942,7 @@ class V4V_Music_Link_Resolver {
 			<?php foreach ( $filter_fields as $field => $label ) : ?>
 				<label style="flex:1 1 130px; min-width:110px;">
 					<span style="display:block;"><?php echo esc_html( $label ); ?></span>
-					<?php if ( 'app' === $field ) : ?>
-						<select name="sl_app" style="width:100%;">
-							<option value=""><?php esc_html_e( 'All apps', 'v4v-musiclink' ); ?></option>
-							<?php foreach ( $apps as $app_slug ) : ?>
-								<option value="<?php echo esc_attr( $app_slug ); ?>" <?php selected( $filters['app'], $app_slug ); ?>><?php echo esc_html( $this->app_display_label( $app_slug ) ); ?></option>
-							<?php endforeach; ?>
-						</select>
-					<?php else : ?>
-						<input type="text" name="sl_<?php echo esc_attr( $field ); ?>" value="<?php echo esc_attr( $filters[ $field ] ); ?>" style="width:100%;" />
-					<?php endif; ?>
+					<input type="text" name="sl_<?php echo esc_attr( $field ); ?>" value="<?php echo esc_attr( $filters[ $field ] ); ?>" style="width:100%;" />
 				</label>
 			<?php endforeach; ?>
 			<button type="submit" class="button button-primary"><?php esc_html_e( 'Filter', 'v4v-musiclink' ); ?></button>
@@ -883,7 +956,7 @@ class V4V_Music_Link_Resolver {
 				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear stored links:', 'v4v-musiclink' ); ?></label>
 				<select name="scope" id="v4v-sl-clear-scope">
 					<option value="all"><?php esc_html_e( 'Clear all stored links', 'v4v-musiclink' ); ?></option>
-					<?php foreach ( $apps as $app_slug ) : ?>
+					<?php foreach ( $link_apps as $app_slug ) : ?>
 						<option value="<?php echo esc_attr( $app_slug ); ?>"><?php printf( esc_html__( 'Clear %s stored links', 'v4v-musiclink' ), esc_html( $this->app_display_label( $app_slug ) ) ); ?></option>
 					<?php endforeach; ?>
 				</select>
@@ -907,12 +980,11 @@ class V4V_Music_Link_Resolver {
 		<table class="widefat striped">
 			<thead>
 				<tr>
-					<th><?php esc_html_e( 'App', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Album GUID', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclink' ); ?></th>
+					<th><?php esc_html_e( 'Artist', 'v4v-musiclink' ); ?></th>
 					<th><?php esc_html_e( 'Album title', 'v4v-musiclink' ); ?></th>
 					<th><?php esc_html_e( 'Track title', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Artist', 'v4v-musiclink' ); ?></th>
+					<th><?php esc_html_e( 'Album GUID', 'v4v-musiclink' ); ?></th>
+					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclink' ); ?></th>
 					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink' ); ?></th>
 					<th><?php esc_html_e( 'Updated', 'v4v-musiclink' ); ?></th>
 					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclink' ); ?></span></th>
@@ -920,19 +992,18 @@ class V4V_Music_Link_Resolver {
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
-					<tr><td colspan="9"><?php esc_html_e( 'No stored links match.', 'v4v-musiclink' ); ?></td></tr>
+					<tr><td colspan="8"><?php esc_html_e( 'No stored links match.', 'v4v-musiclink' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
-							<td><?php echo esc_html( $this->app_display_label( $row->app ) ); ?></td>
-							<td class="code"><?php echo esc_html( $row->album_guid ); ?></td>
-							<td class="code"><?php echo esc_html( $row->track_guid ? $row->track_guid : '—' ); ?></td>
+							<td><?php echo esc_html( $row->artist ); ?></td>
 							<td><?php echo esc_html( $row->album_title ); ?></td>
 							<td><?php echo esc_html( $row->track_title ? $row->track_title : '—' ); ?></td>
-							<td><?php echo esc_html( $row->artist ); ?></td>
+							<td class="code"><?php echo esc_html( $row->album_guid ); ?></td>
+							<td class="code"><?php echo esc_html( $row->track_guid ? $row->track_guid : '—' ); ?></td>
 							<td>
-								<?php if ( $row->url ) : ?>
-									<a href="<?php echo esc_url( $row->url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $row->url ); ?></a>
+								<?php if ( $row->fountain_url ) : ?>
+									<a href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $row->fountain_url ); ?></a>
 								<?php else : ?>
 									<em><?php esc_html_e( 'empty - will re-search', 'v4v-musiclink' ); ?></em>
 								<?php endif; ?>
@@ -949,13 +1020,15 @@ class V4V_Music_Link_Resolver {
 							</td>
 						</tr>
 						<tr id="v4v-sl-edit-<?php echo (int) $row->id; ?>" hidden>
-							<td colspan="9">
+							<td colspan="8">
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0.5em 0;">
 									<input type="hidden" name="action" value="v4v_musiclink_update_stored_link" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
+									<?php // Which link column is being edited; whitelisted against LINK_COLUMNS. ?>
+									<input type="hidden" name="link_field" value="fountain" />
 									<?php wp_nonce_field( 'v4v_musiclink_update_stored_link' ); ?>
 									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink' ); ?></label>
-									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->url ); ?>" style="flex:1 1 320px;" />
+									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->fountain_url ); ?>" style="flex:1 1 320px;" />
 									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclink' ); ?></button>
 									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again.', 'v4v-musiclink' ); ?></span>
 								</form>
@@ -994,17 +1067,22 @@ class V4V_Music_Link_Resolver {
 		$id    = isset( $_POST['link_id'] ) ? (int) $_POST['link_id'] : 0;
 		$url   = isset( $_POST['url'] ) ? esc_url_raw( trim( wp_unslash( $_POST['url'] ) ) ) : '';
 
-		$app = '';
-		if ( $id ) {
-			$app = (string) $wpdb->get_var( $wpdb->prepare( "SELECT app FROM {$table} WHERE id = %d", $id ) );
-		}
+		// Which link column the form was editing: whitelisted against
+		// LINK_COLUMNS, so a field name can never reach SQL, and the app
+		// slug it belongs to, for the domain check below.
+		$field  = isset( $_POST['link_field'] ) ? sanitize_key( wp_unslash( $_POST['link_field'] ) ) : '';
+		$column = isset( self::LINK_COLUMNS[ $field ] ) ? self::LINK_COLUMNS[ $field ] : '';
 
-		$valid = $id && '' !== $app && ( '' === $url || $this->is_valid_stored_url( $url, $app ) );
+		$exists = ( $id && '' !== $column )
+			? $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE id = %d", $id ) )
+			: null;
+
+		$valid = $id && null !== $exists && '' !== $column && ( '' === $url || $this->is_valid_stored_url( $url, $field ) );
 		if ( $valid ) {
 			$wpdb->update(
 				$table,
 				array(
-					'url'        => $url,
+					$column      => $url,
 					'updated_at' => current_time( 'mysql' ),
 				),
 				array( 'id' => $id ),
@@ -1063,14 +1141,15 @@ class V4V_Music_Link_Resolver {
 			$cleared = (int) $wpdb->query( "DELETE FROM {$table}" );
 
 			$this->redirect_to_stored_links( array( 'sl_cleared' => (string) $cleared ) );
-		} elseif ( array_key_exists( $scope, $this->app_registry() ) ) {
-			// Blank the link only: guids, titles and artist survive, and
-			// updated_at records the clear the same way a hand edit does.
+		} elseif ( isset( self::LINK_COLUMNS[ $scope ] ) ) {
+			// Blank that app's link column only: guids, titles and artist
+			// survive on the shared row, and updated_at records the clear
+			// the same way a hand edit does.
+			$column  = self::LINK_COLUMNS[ $scope ];
 			$cleared = (int) $wpdb->query(
 				$wpdb->prepare(
-					"UPDATE {$table} SET url = '', updated_at = %s WHERE app = %s AND url <> ''",
-					current_time( 'mysql' ),
-					$scope
+					"UPDATE {$table} SET {$column} = '', updated_at = %s WHERE {$column} <> ''",
+					current_time( 'mysql' )
 				)
 			);
 
@@ -1088,7 +1167,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.18', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.19', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -1368,7 +1447,7 @@ JS;
 			// corrected by hand is never reverted. '' means either "no
 			// entry yet" or "entry whose link was blanked to force a
 			// re-search"; both fall through to the search below.
-			$stored_url = $this->get_stored_link( 'fountain', $album, $track );
+			$stored_url = $this->get_stored_link( $album, $track );
 
 			if ( '' !== $stored_url ) {
 				$fountain_url = $stored_url;
@@ -1394,7 +1473,7 @@ JS;
 					// Only a real deep link is ever stored: the plain
 					// fountain.fm fallback above must never be persisted,
 					// or it would pin the homepage to this release.
-					$this->store_stored_link( 'fountain', $album, $track, $fountain_url, $album_title, $track_title, $artist );
+					$this->store_stored_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
 				}
 			}
 
