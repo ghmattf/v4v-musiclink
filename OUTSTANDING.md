@@ -237,7 +237,8 @@ captured" into O4's `tests/` move so the fixtures cannot rot silently again.
 
 ## O10. Fountain now publishes an official API - the plugin still uses the internal `/search` server action
 
-**Status: Open** (identified 2026-09-26, awaiting triage).
+**Status: On hold** (user deferred 2026-09-26, after the unauthenticated
+probe below; no code changes made, re-open only on request).
 
 **What:** while reviewing the project against Fountain's Terms of Use
 (`https://fountain.fm/terms-of-use`, last updated 2026-09-16) it turned out
@@ -341,3 +342,7 @@ block later would be inconvenient to answer honestly).
   exactly once (see CHANGELOG 1.20.20).
 - **Security review findings #1-#4, #6-#8**: all implemented and released
   through 1.22.14 / 1.20.20 (see CHANGELOG).
+- **Fountain official-API migration + spoofed-UA transparency fix**
+  (offered as O10 options 2026-09-26): declined that day - user chose to
+  stop after the unauthenticated probe. O10 carries the recorded probe data;
+  re-propose only on request.
