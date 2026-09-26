@@ -271,10 +271,50 @@ path"**: the spoofed browser UA and the reliance on a reverse-engineered
 build hash are the two soft spots (§10's undefined "exploit"; a UA-based
 block later would be inconvenient to answer honestly).
 
+**Probe results (2026-09-26, unauthenticated):**
+- `POST https://api.fountain.fm/v1/search/content` with no key **and** with a
+  bogus `Bearer` both return `403 {"ok":false,"error":{"code":"FORBIDDEN",
+  "message":"Not authorized."}}` - a key is required; the two cases are
+  indistinguishable. Cloudflare in front, `access-control-allow-origin: *`,
+  **no rate-limit headers** on the 403.
+- Keys: created from `fountain.fm/studio/projects`, prefix `fountain_`, sent
+  as `Authorization: Bearer <key>`, base `https://api.fountain.fm/v1`.
+- Cost/volume: FAQ `/faq/api-keys` - *"API and MCP calls are unlimited on
+  every plan, so there is no metering on the calls themselves"*; pricing page
+  - *"Drafts, searches, and API and MCP calls are free"* (no credits burnt).
+  Plans are Lite $25/mo, Pro $50/mo, Custom - so a project sits behind a
+  podcaster/artist account, not a free listener account (unconfirmed).
+- Scope: `POST /search/content` body is only `query` / `types` / `parent` -
+  **no project parameter**, and the docs describe it as "Search across
+  Fountain: content, transcripts, and Nostr profiles", so the index read is
+  global rather than limited to the caller's connected shows (needs one real
+  call to confirm).
+- `types` accepts `SHOW|EPISODE|ARTIST|ALBUM|TRACK|CLIP` - i.e. albums and
+  tracks, exactly this plugin's domain.
+- `ContentHit` = `_id` (`{type}:id:{id}`), `_type` (uppercase), `_guid`
+  (**optional** - "Podcast GUID, when the content originates from an RSS
+  feed"), `info.title`/`subtitle`/`publisher`/`audio`/`video`/`duration`,
+  `links`.
+- OAuth alternative for agent flows: `authorization_code` + PKCE (S256),
+  public client (`token_endpoint_auth_methods: ["none"]`), endpoints
+  `/v1/oauth/authorize` and `/v1/oauth/token`, protected resource `/v1/mcp`.
+
+**Fit with the existing code (from reading, not yet executed):**
+- `fountain_path_segment()` (std ~1877) already maps uppercase
+  `TRACK`/`ALBUM`/`EPISODE`/`SHOW` - compatible with the official `_type`.
+- `extract_fountain_hit()` matches on `_guid` (std ~1834) - but the official
+  `_guid` is optional, so a hit without one would never match; needs a
+  fallback (match on `info.title`/`subtitle`, or `_id` shape) plus a probe to
+  see whether album/track hits actually carry `_guid`.
+- The URL is built as `https://fountain.fm/{segment}/{_id}` (std ~1468-1471),
+  but official `_id` is `episode:id:abc123` - the `{type}:id:` prefix must be
+  stripped before use.
+
 **Plan sketch:**
-- Probe the official endpoint: does `api.fountain.fm/v1/search/content`
-  accept a key from an ordinary (free) Fountain account, what are the rate
-  limits, and does an unauthenticated call work at all?
+- ~~Probe the official endpoint~~ done 2026-09-26 (above); the remaining
+  unknowns - does a real key return album/track hits with `_guid`, and does
+  search return content the caller does not host - need one authenticated
+  call, i.e. an actual Fountain project + API key.
 - If usable: add an optional "Fountain API key" setting (server-side only,
   never printed into page markup), call the official endpoint from
   `fountain_resolve()`, and map `hits[]` into the same `_guid`/`_id`/`_type`
