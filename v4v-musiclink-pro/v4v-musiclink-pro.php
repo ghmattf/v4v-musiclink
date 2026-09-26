@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.23
+ * Version: 1.20.24
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1284,7 +1284,9 @@ class V4V_Music_Link_Resolver_Pro {
 			'album_title' => __( 'Album title', 'v4v-musiclink-pro' ),
 			'track_title' => __( 'Track title', 'v4v-musiclink-pro' ),
 			'artist'      => __( 'Artist', 'v4v-musiclink-pro' ),
-			'url'         => __( 'Link', 'v4v-musiclink-pro' ),
+			// Named for the app that writes these rows today; if a second
+			// app ever stores links, this needs to become per-app.
+			'url'         => __( 'Fountain.fm link', 'v4v-musiclink-pro' ),
 		);
 
 		$filters = array();
@@ -1338,9 +1340,19 @@ class V4V_Music_Link_Resolver_Pro {
 
 		$plain_tab_url = admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=links' );
 		?>
-		<?php if ( isset( $_GET['sl_cleared'] ) ) : ?>
+		<?php if ( isset( $_GET['sl_links_cleared'], $_GET['sl_cleared_app'] ) ) : ?>
+			<?php // Per-app clear: the link column was blanked, the rows stay. ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php printf( esc_html__( '%s stored link(s) cleared.', 'v4v-musiclink-pro' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
+				<p><?php printf(
+					esc_html__( '%1$s link cleared on %2$s row(s).', 'v4v-musiclink-pro' ),
+					esc_html( $this->app_display_label( sanitize_text_field( wp_unslash( $_GET['sl_cleared_app'] ) ) ) ),
+					esc_html( sanitize_text_field( wp_unslash( $_GET['sl_links_cleared'] ) ) )
+				); ?></p>
+			</div>
+		<?php elseif ( isset( $_GET['sl_cleared'] ) ) : ?>
+			<?php // Clear all: the rows themselves are gone. ?>
+			<div class="notice notice-success is-dismissible">
+				<p><?php printf( esc_html__( '%s stored row(s) removed.', 'v4v-musiclink-pro' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_saved'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
@@ -1357,7 +1369,7 @@ class V4V_Music_Link_Resolver_Pro {
 		<?php endif; ?>
 
 		<p class="description">
-			<?php esc_html_e( 'Links are stored here the first time the Fountain search resolves one for a release, together with the release details shown below. A stored link is used exactly as it stands - no search, no refresh - until you edit or remove it. Blank a link to force a fresh search on the next page view, or delete a row to start over. Rows reappear automatically as releases are viewed.', 'v4v-musiclink-pro' ); ?>
+			<?php esc_html_e( 'Links are stored here the first time the Fountain search resolves one for a release, together with the release details shown below. A stored link is used exactly as it stands - no search, no refresh - until you edit or remove it. Blank a link to force a fresh search on the next page view, or delete a row to start over. Clearing one app\'s links blanks them but keeps the rows; clearing all stored links removes the rows themselves. Either way, a missing link re-resolves the next time its release is viewed.', 'v4v-musiclink-pro' ); ?>
 		</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:1em 0;">
@@ -1383,7 +1395,7 @@ class V4V_Music_Link_Resolver_Pro {
 		</form>
 
 		<?php if ( $total > 0 ) : ?>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="return confirm( this.scope.options[ this.scope.selectedIndex ].text + ' <?php echo esc_js( __( 'This cannot be undone.', 'v4v-musiclink-pro' ) ); ?>' );">
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="var label = this.scope.options[ this.scope.selectedIndex ].text; return confirm( 'all' === this.scope.value ? '<?php echo esc_js( __( 'Clear all stored links? Every row is removed - hand-edited links included - and each re-resolves when its release is viewed again.', 'v4v-musiclink-pro' ) ); ?>' : label + ' <?php echo esc_js( __( 'The rows stay, but the links are blanked and re-resolve when their releases are viewed again.', 'v4v-musiclink-pro' ) ); ?>' );">
 				<input type="hidden" name="action" value="v4v_musiclink_pro_clear_stored_links" />
 				<?php wp_nonce_field( 'v4v_musiclink_pro_clear_stored_links' ); ?>
 				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear stored links:', 'v4v-musiclink-pro' ); ?></label>
@@ -1419,7 +1431,7 @@ class V4V_Music_Link_Resolver_Pro {
 					<th><?php esc_html_e( 'Album title', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Track title', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Artist', 'v4v-musiclink-pro' ); ?></th>
-					<th><?php esc_html_e( 'Link', 'v4v-musiclink-pro' ); ?></th>
+					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Updated', 'v4v-musiclink-pro' ); ?></th>
 					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclink-pro' ); ?></span></th>
 				</tr>
@@ -1460,7 +1472,7 @@ class V4V_Music_Link_Resolver_Pro {
 									<input type="hidden" name="action" value="v4v_musiclink_pro_update_stored_link" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
 									<?php wp_nonce_field( 'v4v_musiclink_pro_update_stored_link' ); ?>
-									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Link', 'v4v-musiclink-pro' ); ?></label>
+									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></label>
 									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->url ); ?>" style="flex:1 1 320px;" />
 									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclink-pro' ); ?></button>
 									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again.', 'v4v-musiclink-pro' ); ?></span>
@@ -1544,11 +1556,14 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * admin-post.php handler behind the Clear control: empties either the
-	 * whole table or only the rows of the selected app, then returns to
-	 * the tab with a count. DELETE rather than TRUNCATE: needs only the
-	 * DELETE privilege, so it also works on restricted WordPress database
-	 * users (same reasoning as the view log's clear handler above).
+	 * admin-post.php handler behind the Clear control: empties the whole
+	 * table, or - for a single app - blanks only the link column and leaves
+	 * every other field of those rows in place (a cleared row stays listed
+	 * as "empty - will re-search" and simply re-resolves on its next view).
+	 * Returns to the tab with a count either way. The DELETE for Clear all
+	 * rather than TRUNCATE: it needs only the DELETE privilege, so it also
+	 * works on restricted WordPress database users (same reasoning as the
+	 * view log's clear handler above).
 	 */
 	public function handle_clear_stored_links() {
 		check_admin_referer( 'v4v_musiclink_pro_clear_stored_links' );
@@ -1562,14 +1577,29 @@ class V4V_Music_Link_Resolver_Pro {
 		$scope = isset( $_POST['scope'] ) ? sanitize_key( wp_unslash( $_POST['scope'] ) ) : 'all';
 
 		if ( 'all' === $scope ) {
+			// Purge the rows outright - the only bulk way to drop entries
+			// (including their guids, titles and any hand-edited link).
 			$cleared = (int) $wpdb->query( "DELETE FROM {$table}" );
-		} elseif ( array_key_exists( $scope, $this->app_registry() ) ) {
-			$cleared = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE app = %s", $scope ) );
-		} else {
-			$cleared = 0;
-		}
 
-		$this->redirect_to_stored_links( array( 'sl_cleared' => (string) $cleared ) );
+			$this->redirect_to_stored_links( array( 'sl_cleared' => (string) $cleared ) );
+		} elseif ( array_key_exists( $scope, $this->app_registry() ) ) {
+			// Blank the link only: guids, titles and artist survive, and
+			// updated_at records the clear the same way a hand edit does.
+			$cleared = (int) $wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$table} SET url = '', updated_at = %s WHERE app = %s AND url <> ''",
+					current_time( 'mysql' ),
+					$scope
+				)
+			);
+
+			$this->redirect_to_stored_links( array(
+				'sl_links_cleared' => (string) $cleared,
+				'sl_cleared_app'   => $scope,
+			) );
+		} else {
+			$this->redirect_to_stored_links( array( 'sl_cleared' => '0' ) );
+		}
 	}
 
 	public function register_settings() {
@@ -2169,7 +2199,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.23', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.24', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),

@@ -3,6 +3,17 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.18] - 2026-09-26
+
+### Changed
+- **The stored link field is now labelled "Fountain.fm link" instead of the generic "Link"** — in the tab's filter row, its table column header, and the inline row editor. That column holds Fountain links only today (only Fountain writes rows), so the label now says what the value actually is; the field name itself (`url`) is unchanged, so no schema or data migration.
+- **"Clear *X* stored links" now clears the Fountain.fm link on each row of that app and leaves every other field in place**: it is an `UPDATE … SET url = '' WHERE app = … AND url <> ''` rather than a `DELETE`, so the album/track guids, titles, artist and the entry itself survive — the rows stay listed as "empty - will re-search", `updated_at` is stamped exactly as a hand edit would stamp it, and each link re-resolves the next time its release is viewed. **"Clear all stored links" still deletes whole rows**, because it is the only bulk way to purge entries outright (hand-edited links included), so the two options now differ in kind and not just in scope. Each outcome announces itself precisely — "Fountain.fm link cleared on N row(s)." versus "N stored row(s) removed." — and the confirmation and the tab description now state what actually happens per option instead of the blanket "This cannot be undone.", which was only ever true of Clear all.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.24] - 2026-09-26
+
+### Changed
+- **Identical to Resolver 1.22.18 — the link field is labelled "Fountain.fm link", and the two clear scopes do different things**: the per-app clear blanks only that app's link column (guids, titles, artist and the entry itself survive, `updated_at` is stamped, and the link re-resolves on the release's next view) while "Clear all stored links" still deletes whole rows; the notices, confirmation text and tab description each say which of the two just happened. The edit label, column header and filter label all read "Fountain.fm link".
+
 ## Resolver (v4v-musiclink) — [1.22.17] - 2026-09-26
 
 ### Added
