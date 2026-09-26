@@ -14,7 +14,7 @@ or **explicitly declined**. Implemented history is never here - it is in
 **Status key:** **Planned** = user picked it, plan below, implement only on
 request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 
-Line numbers below are as of 2026-09-25 (Resolver 1.22.15 / Pro 1.20.21);
+Line numbers below are as of 2026-09-26 (Resolver 1.22.16 / Pro 1.20.22);
 they will drift - re-locate by symbol name.
 
 ---
@@ -87,22 +87,6 @@ on each settings page (standard ~line 472, Pro ~line 1508): "Last attempt:
 2026-09-25 12:00 - status 404" or "never attempted". Both plugins. A
 manual "Test now" button would be a scope extension - only if the user
 asks.
-
----
-
-## O6. Stale "social-preview meta tags" wording in the standard plugin
-
-**Status: Open** (identified 2026-09-25 during the Telegram investigation).
-
-**What:** the standard plugin's `resolve_release_meta()` docblock
-(sentence at ~line 652, function at 655) says its data feeds "the
-social-preview meta tags below" - but the standard plugin emits no social
-meta at all (removed before 1.22.x; confirmed: this docblock is the only
-surviving trace). One-line docblock fix. While there, check the same
-sentence in the Pro docblock (~line 2155): Pro's social-tag producers
-(`output_social_preview_meta()`, `render_meta_tags()`) sit *above*
-`resolve_release_meta()` (line 2158), so "below" is directionally stale
-there too.
 
 ---
 

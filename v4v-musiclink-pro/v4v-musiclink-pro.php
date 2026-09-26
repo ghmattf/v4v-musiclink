@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.21
+ * Version: 1.20.22
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1636,7 +1636,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.21', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.22', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2151,9 +2151,8 @@ JS;
 
 	/**
 	 * Resolves title/artist/artwork for an album (and optionally a track)
-	 * via Music Index, once, in one place - used by both the on-page
-	 * display and the social-preview meta tags below, so they never drift
-	 * out of sync with each other.
+	 * via Music Index, once, in one place - the single source for the
+	 * on-page display, social-preview meta tags, and log beacons.
 	 */
 	private function resolve_release_meta( $album, $track, $has_track ) {
 		$track_data = $has_track ? $this->mi_get_track( $album, $track ) : null;

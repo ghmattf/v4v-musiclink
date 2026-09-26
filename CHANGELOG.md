@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.16] - 2026-09-26
+
+### Changed
+- **Comment-only docblock correction — no functional change**: `resolve_release_meta()`'s docblock claimed it fed "the social-preview meta tags below", but the standard plugin emits no social-preview meta tags at all (removed before 1.22.x; this was the last surviving trace of them). It now states the truth: the method is the single source for the on-page display. Shipped with the matching fix in `v4v-musiclink-pro` 1.20.22.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.22] - 2026-09-26
+
+### Changed
+- **Comment-only docblock correction — no functional change**: `resolve_release_meta()`'s docblock pointed at "the social-preview meta tags below", but those producers (`compute_preview_fields()`, `output_social_preview_meta()`, `render_meta_tags()`) all sit above it, and the two log beacons are consumers too. The docblock now names the real consumers — on-page display, social-preview meta tags, and log beacons — which is why the resolution lives in one place. Matching fix in `v4v-musiclink` 1.22.16.
+
 ## Resolver (v4v-musiclink) — [1.22.15] - 2026-09-25
 
 ### Changed
