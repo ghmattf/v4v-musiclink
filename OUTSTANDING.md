@@ -207,6 +207,34 @@ redeploy, which no stored row covers.
 
 ---
 
+## O9. The two live Fountain probes hardcode a rotated `next-action` token, so they now 404
+
+**Status: Open** (identified 2026-09-26, awaiting triage).
+
+**What:** `tmp/fountain_candidate_test.php` and `tmp/fountain_case_test.php`
+both POST to `https://fountain.fm/search` with a **hardcoded** `next-action`
+header - `$SID` = `605af9c39c662ad04c72e52279d6db26f12973e250`
+(`fountain_case_test.php` line 13) and a fixed candidate list passed to
+`resolve_with()` (`fountain_candidate_test.php`). On the 2026-09-26 release
+run both returned HTTP 404 with body `Server action not found.` on *every*
+request (re-run once, identical), i.e. Fountain has rotated the action hash
+those fixtures were captured against.
+
+**This is a stale fixture, not a plugin bug.** `tmp/fountain_live_test.php`
+autodetects the current next-action from the `/search-page` chunks exactly as
+the shipped `fountain_autodetect_next_action()` does, and it passed 20/20
+against the same endpoint in the same run - so the production search path is
+fine. Neither failing probe loads plugin code for its request either.
+
+**Plan sketch:** make the two probes detect rather than embed - reuse the
+chunk scan `fountain_live_test.php` already has (or call the plugin's
+`fountain_autodetect_next_action()` and feed its result into `next-action`);
+keep the bogus-token request `fountain_case_test.php` already makes as the
+deliberate stale-hash 404 assertion. Fold "the token must be detected, not
+captured" into O4's `tests/` move so the fixtures cannot rot silently again.
+
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **Fountain self-heal stays inline** (security review finding #5):
