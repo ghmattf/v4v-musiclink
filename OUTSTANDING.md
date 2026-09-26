@@ -235,6 +235,58 @@ captured" into O4's `tests/` move so the fixtures cannot rot silently again.
 
 ---
 
+## O10. Fountain now publishes an official API - the plugin still uses the internal `/search` server action
+
+**Status: Open** (identified 2026-09-26, awaiting triage).
+
+**What:** while reviewing the project against Fountain's Terms of Use
+(`https://fountain.fm/terms-of-use`, last updated 2026-09-16) it turned out
+Fountain now ships a documented public API that did not exist when this
+plugin was written:
+
+- `POST https://api.fountain.fm/v1/search/content` with
+  `Authorization: Bearer $FOUNTAIN_API_KEY`, body `{"query":..., "types":["SHOW","EPISODE"]}`
+  (docs: `https://fountain.fm/docs/endpoints/search`, markdown via
+  `https://fountain.fm/llms.txt`; key/FAQ: `/faq/api-keys`; MCP at
+  `https://api.fountain.fm/v1/mcp`).
+- The 200 payload is `hits[]` carrying `_id`, `_type`, `_guid` and
+  `info.title`/`subtitle`/`publisher` - i.e. **the same fields
+  `extract_fountain_hit()` already parses** (standard ~line 1834, Pro ~3548).
+
+The plugin instead POSTs to the **undocumented internal Next.js server
+action** `https://fountain.fm/search` with a detected `next-action` hash,
+`Origin`/`Referer` of fountain.fm and a spoofed Chrome 151 User-Agent
+(`fountain_try_resolve()` standard ~1596, Pro ~3310), plus a self-heal crawl
+of 2 seed pages and up to ~40 `/_next/static/*.js` chunks to rediscover that
+hash (`fountain_autodetect_next_action()` standard ~1714, Pro ~3428).
+
+**Compliance read (not legal advice):** no clause of the ToS is plainly
+breached - §10 bans "disrupt[ing] or exploit[ing] the platform" but says
+nothing about automated access, `robots.txt` is `Allow: /`, the plugin is
+unauthenticated (so §11's account/agent authorisation is not engaged), holds
+no account to suspend (§3/§14), and request volume is low, cached (30-day
+positive / 1-hour negative transients) and throttled (15-minute self-heal).
+The honest description is **"not prohibited, but now off the sanctioned
+path"**: the spoofed browser UA and the reliance on a reverse-engineered
+build hash are the two soft spots (§10's undefined "exploit"; a UA-based
+block later would be inconvenient to answer honestly).
+
+**Plan sketch:**
+- Probe the official endpoint: does `api.fountain.fm/v1/search/content`
+  accept a key from an ordinary (free) Fountain account, what are the rate
+  limits, and does an unauthenticated call work at all?
+- If usable: add an optional "Fountain API key" setting (server-side only,
+  never printed into page markup), call the official endpoint from
+  `fountain_resolve()`, and map `hits[]` into the same `_guid`/`_id`/`_type`
+  shape so `extract_fountain_hit()` and `fountain_path_segment()` stay as-is.
+- Keep the current server-action path as an automatic fallback when no key
+  is configured, so existing installs don't regress; this also gives a
+  second answer to O7 (self-heal churn disappears for keyed installs).
+- Both plugins, unchanged per-plugin keyspaces. Remove this item when the
+  API path ships (or when the user declines it).
+
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **Fountain self-heal stays inline** (security review finding #5):
