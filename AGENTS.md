@@ -59,8 +59,9 @@ Applies to code releases only (never for docs-only changes):
 1. Lint both plugin files: `./php/php -l <file>` (use the project PHP from
    `php/install.sh`; no system PHP).
 2. Run the regression harnesses: `./php/php tmp/<harness>.php` for each
-   `tmp/test_*.php` / `tmp/*_test.php` (10 files; `fountain_live_test` is
-   live-network and can flake — re-run it once before concluding). Until
+   `tmp/test_*.php` / `tmp/*_test.php` (14 files; `fountain_live_test`,
+   `fountain_candidate_test` and `fountain_case_test` are live-network and
+   can flake — re-run a flaky one once before concluding). Until
    `OUTSTANDING.md` item O4 lands, they live in gitignored `tmp/`.
 3. `./bump-version.sh standard|pro|both` — bumps the plugin header and the script
    cache-buster (and refreshes backup copies under `archive/`, which stay uncommitted).
