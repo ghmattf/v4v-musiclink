@@ -14,7 +14,7 @@ or **explicitly declined**. Implemented history is never here - it is in
 **Status key:** **Planned** = user picked it, plan below, implement only on
 request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 
-Line numbers below are as of 2026-09-26 (Resolver 1.22.18 / Pro 1.20.24);
+Line numbers below are as of 2026-09-26 (Resolver 1.22.19 / Pro 1.20.25);
 they will drift - re-locate by symbol name.
 
 ---
@@ -58,7 +58,7 @@ flake/timeout; treat as informational and re-run once before concluding),
 `fountain_candidate_test.php` / `fountain_case_test.php` (no assertion
 counter) and the browser e2e in `tmp/e2e/` (`gen_page.php`, `router.php` -
 captured HTML files in that dir are scratch). Baseline as of 2026-09-26:
-14 files, 671 counted assertions, all green.
+14 files, 728 counted assertions, all green.
 
 **Plan sketch:** create tracked `tests/`; `git mv` the ten harnesses plus
 `wpstub/` (same directory depth as `tmp/`, so their
