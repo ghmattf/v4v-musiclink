@@ -45,7 +45,7 @@ Shortcode: `[musiclink_pro]` (accepts the same `album`/`track` attributes as the
 | StableKraft.app | Formulaic GUID-based URL, no lookup required |
 | PodTunes.app | Formulaic GUID-based URL, no lookup required |
 | v4vmusic.com | Search by title (resolved from Music Index) — no public album/track pages exist |
-| Fountain.fm | Resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint; falls back to a plain fountain.fm link on failure |
+| Fountain.fm | Resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint; falls back to `https://fountain.fm/discover` on failure |
 
 Each app can be individually disabled and/or given a custom icon URL under **Settings → V4V MusicLink** (standard) / **Settings → V4V MusicLink Pro** (Pro).
 

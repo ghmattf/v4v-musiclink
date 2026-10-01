@@ -3,6 +3,17 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.20] - 2026-10-01
+
+### Changed
+- **When no direct Fountain link can be retrieved, the Fountain button now points at `https://fountain.fm/discover` instead of the bare `https://fountain.fm` homepage**: Fountain's site restructure moved its front door, so the bare homepage was no longer a useful place to land a visitor who wanted the release — and it is exactly where every button lands while a redeploy is being self-healed, which is when the link is most likely to be clicked. The new target is used by the render fallback itself and by the client-side modal that intercepts an unresolved link before opening it (the modal now matches the discover URL first and still matches the bare homepage, so a link an admin typed by hand keeps the same confirm-first behaviour). The settings help text, the plugin-header DevTools notes and the comments around the fallback all say `fountain.fm/discover` now. Deep links, stored links and the rule that the fallback is never written to the stored-links table (it would pin a generic link to that release forever) are unchanged.
+- **Docs: the README's Fountain row now names the fallback it actually uses** (`https://fountain.fm/discover`).
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.26] - 2026-10-01
+
+### Changed
+- **Identical to Resolver 1.22.20 — the unresolved Fountain fallback is now `https://fountain.fm/discover` rather than the bare homepage**: the render fallback, the modal's click intercept (with launch logging untouched — a click that only opens the modal still logs nothing, and confirming still logs the launch against the new URL), the settings help text and the surrounding comments all follow. Resolved deep links, stored links and the never-persist-the-fallback rule are unchanged.
+
 ## Resolver (v4v-musiclink) — [1.22.19] - 2026-09-26
 
 ### Changed

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.25
+ * Version: 1.20.26
  * Author: Matt Finlay
  *
  * USAGE:
@@ -23,8 +23,8 @@
  *    automatically (see below) before falling back to a plain link, so
  *    manual re-capture is a fallback rather than a requirement. Nothing
  *    breaks if this is left unset from the start either - Fountain just
- *    always falls back to a plain fountain.fm link until a value (manual
- *    or auto-detected) is available.
+ *    always falls back to fountain.fm/discover until a value (manual or
+ *    auto-detected) is available.
  * 2. Create a WordPress Page with the slug "musiclink" (Pages > Add New).
  *    Set the page content to just the shortcode: [musiclink_pro]
  * 3. Link to it as:
@@ -53,7 +53,7 @@
  *   files looking for a fresh next-action value (best-effort heuristic,
  *   throttled to once per 15 minutes), retries once with it, and - if
  *   that succeeds - saves it so future requests use it directly without
- *   repeating the crawl. Falls back to a plain fountain.fm link if all of
+ *   repeating the crawl. Falls back to fountain.fm/discover if all of
  *   that fails too.
  *
  * SOCIAL PREVIEWS: when the musiclink page (or any page containing the
@@ -1088,7 +1088,7 @@ class V4V_Music_Link_Resolver_Pro {
 	 * Fountain block consults it first, so once a link has been resolved it
 	 * no longer depends on Fountain's `next-action` hash, a transient, or
 	 * the background self-heal - which is exactly the chain that was
-	 * serving the plain fountain.fm homepage for 30+ minutes after a
+	 * serving a generic fountain.fm link for 30+ minutes after a
 	 * self-heal had already succeeded.
 	 *
 	 * Rule: a row with a non-empty link is used verbatim - no search, no
@@ -2172,7 +2172,7 @@ class V4V_Music_Link_Resolver_Pro {
 							<p class="description">
 								<?php
 								esc_html_e(
-									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to fountain.fm plainly until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
+									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to fountain.fm/discover until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
 									'v4v-musiclink-pro'
 								);
 								?>
@@ -2290,7 +2290,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.25', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.26', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2652,7 +2652,11 @@ class V4V_Music_Link_Resolver_Pro {
 
 				fountainLink.addEventListener("click", function (e) {
 					var href = fountainLink.getAttribute("href");
-					if (href === "https://fountain.fm" || href === "https://fountain.fm/") {
+					// Unresolved fallback (fountain.fm/discover); the bare
+					// homepage stays matched for a link set by hand.
+					var isFallback = href === "https://fountain.fm/discover"
+						|| href === "https://fountain.fm" || href === "https://fountain.fm/";
+					if (isFallback) {
 						e.preventDefault();
 						pendingHref = href;
 						modal.classList.add("is-open");
@@ -2907,12 +2911,12 @@ JS;
 		// Their ONLY resolution mechanism is an unofficial, undocumented
 		// Next.js Server Action - fragile because its "next-action" build
 		// fingerprint changes whenever Fountain redeploys. We call it here,
-		// but cache successes for a long time and always fall back to the
-		// plain fountain.fm link on any failure, so a stale/broken hash
+		// but cache successes for a long time and always fall back to
+		// fountain.fm/discover on any failure, so a stale/broken hash
 		// never breaks the button - it just stops being a direct link
 		// until the hash is refreshed (see FOUNTAIN_NEXT_ACTION below).
 		if ( $this->is_app_enabled( 'fountain' ) ) {
-			$fountain_url = 'https://fountain.fm';
+			$fountain_url = 'https://fountain.fm/discover';
 
 			// Stored link first: an exact album/track match with a link on
 			// file is used exactly as it stands - no search, no transient,
@@ -2944,9 +2948,10 @@ JS;
 						. '/'
 						. rawurlencode( $fountain_hit['id'] );
 
-					// Only a real deep link is ever stored: the plain
-					// fountain.fm fallback above must never be persisted,
-					// or it would pin the homepage to this release.
+					// Only a real deep link is ever stored: the
+					// fountain.fm/discover fallback above must never be
+					// persisted, or it would pin a generic Fountain link
+					// to this release forever.
 					$this->store_stored_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
 				}
 			}
@@ -3391,7 +3396,7 @@ JS;
 	 * Both are definitive and keep FAIL_CACHE_TTL. Everything else -
 	 * transport failure, 5xx, redirect, or a 200 body we couldn't read -
 	 * is unconfirmed and gets SOFT_FAIL_CACHE_TTL, so one blip can't pin
-	 * the button to the plain fountain.fm link for a full hour.
+	 * the button to the fountain.fm/discover fallback for a full hour.
 	 */
 	private function fountain_negative_cache_ttl() {
 		return ( 200 === $this->last_fountain_status || 404 === $this->last_fountain_status )
@@ -3583,7 +3588,7 @@ JS;
 	 * The type therefore decides the prefix. Only when Fountain omits a
 	 * type we recognise do we fall back to the historic guess - whether
 	 * the shortcode supplied a track guid - which preserves the previous
-	 * behaviour rather than degrading to a bare fountain.fm link.
+	 * behaviour rather than degrading to the fountain.fm/discover fallback.
 	 *
 	 * @param array $hit      Resolution result from extract_fountain_hit().
 	 * @param bool  $has_track Whether the shortcode carried track data (fallback only).

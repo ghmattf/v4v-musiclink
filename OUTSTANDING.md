@@ -14,7 +14,7 @@ or **explicitly declined**. Implemented history is never here - it is in
 **Status key:** **Planned** = user picked it, plan below, implement only on
 request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 
-Line numbers below are as of 2026-09-26 (Resolver 1.22.19 / Pro 1.20.25);
+Line numbers below are as of 2026-10-01 (Resolver 1.22.20 / Pro 1.20.26);
 they will drift - re-locate by symbol name.
 
 ---
@@ -57,8 +57,10 @@ flake/timeout; treat as informational and re-run once before concluding),
 `test_fountain_path.php`, plus the two live Fountain probes
 `fountain_candidate_test.php` / `fountain_case_test.php` (no assertion
 counter) and the browser e2e in `tmp/e2e/` (`gen_page.php`, `router.php` -
-captured HTML files in that dir are scratch). Baseline as of 2026-09-26:
-14 files, 728 counted assertions, all green.
+captured HTML files in that dir are scratch). Baseline as of 2026-10-01:
+14 files - the 11 offline harnesses are green (708 counted assertions);
+`fountain_live_test` is 0/20 until O11 is fixed, and the two live Fountain
+probes still print nothing per O9.
 
 **Plan sketch:** create tracked `tests/`; `git mv` the ten harnesses plus
 `wpstub/` (same directory depth as `tmp/`, so their
@@ -325,6 +327,67 @@ block later would be inconvenient to answer honestly).
   second answer to O7 (self-heal churn disappears for keyed installs).
 - Both plugins, unchanged per-plugin keyspaces. Remove this item when the
   API path ships (or when the user declines it).
+
+---
+
+## O11. Fountain's latest redeploy reordered the `next-action` ids, so self-heal now persists the WRONG one and every Fountain button falls back
+
+**Status: Open** (identified 2026-10-01, awaiting triage).
+
+**Symptom.** `tmp/fountain_live_test.php` went from 20/20 green (2026-09-26)
+to **0/20**, reproduced on two consecutive runs (so not a network flake), for
+BOTH classes: `fountain_resolve()` returns no hit and the auto-detected
+`next-action` is never persisted (`... persisted via update_option(...)` ->
+`none`). The offline suite still looks healthy - 708 offline assertions pass,
+the 20 live ones do not - because those stub the HTTP layer, so this is
+invisible to the release gate. On the front end every Fountain button
+therefore renders the fallback link (the `https://fountain.fm/discover` link
+this turn's release switches to), which is the user-visible symptom.
+
+**Root cause (proven live 2026-10-01; repro script
+`/tmp/opencode/diag_scan.py`).** Fountain redeployed, and in the shared chunk
+`/_next/static/immutable/chunks/2fv5aivvlt_ba.js` the near-"search" hex ids
+came back in a new order:
+
+| candidate, in file order | `POST /search` with `["See Through",[]]` |
+|---|---|
+| `608818e35378be12b7e6c169407aa64d4cbffc6079` **(what the plugin picks)** | 200, 97 B, `{"content":[],"profiles":[]}` - no `hits` |
+| `6028cb7b546a83379b6f77849aa2391bd7481bbddb` | 200, ~16-25 KB, `1:{"hits":[...]}` carrying the right `_guid`s (track `cbdaeaa0…`, album `d5c805fb…`) and `_type` TRACK/ALBUM |
+| `4080494aa4b8eb5305e760d79786d38df872619dc8` | 200, 84 B, no `hits` |
+
+`fountain_autodetect_next_action()` (std ~1719 / Pro ~3433) deliberately
+returns the FIRST near-"search" hex and short-circuits, on the documented
+assumption that "the searchContent registration is declared before
+searchProfiles, so the first candidate is the right action" (docblock std
+~1701-1704). The redeploy broke that ordering assumption: self-heal keeps
+rediscovering the wrong action id, the retry produces no `hits` payload, so
+`fountain_resolve()` (std ~1564 / Pro ~3278) never calls `update_option()`
+and the state never recovers - the 15-minute throttle just repeats the same
+wrong answer.
+
+Everything else still works, verified live: the seed/delta scan order is
+intact (search-page delta = 3 chunks, scan total 23, and scan #1 is already
+the chunk holding all three ids), the endpoint/headers/body shape are valid,
+and `extract_fountain_hit()` parses the good candidate's response fine.
+
+**Plan sketch (pick one, or combine):**
+- **Probe candidates instead of trusting the first**: let autodetect return
+  ALL near-"search" candidates for a chunk and have `fountain_resolve()`
+  try them in order, persisting the first that yields a parseable `hits`
+  payload. Immune to any future reordering; costs one extra POST per
+  redeploy (<= ~4 candidates in the observed chunk).
+- **Or tighten selection**: accept a hex only when it sits next to the
+  `searchContent` identifier rather than merely within 300 chars of the
+  word "search" (the same chunk also carries `createServerReference` /
+  `registerServerReference`, verified live). Cheaper, but repeats if the
+  layout moves again.
+- Either way `tmp/fountain_fix_test.php` (104 assertions encoding
+  "first candidate wins" plus the D1-D4 scan-order matrix) and
+  `tmp/fountain_probe.php` (still homepage-only, stale vs the plugin's
+  /search-first order) need updating, then re-run
+  `tmp/fountain_live_test.php` expecting 20/20.
+- Until something is picked: buttons keep rendering the discover fallback,
+  which is the mitigation this turn ships.
 
 ---
 
