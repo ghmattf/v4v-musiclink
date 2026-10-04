@@ -389,6 +389,40 @@ and `extract_fountain_hit()` parses the good candidate's response fine.
 - Until something is picked: buttons keep rendering the discover fallback,
   which is the mitigation this turn ships.
 
+**Re-confirmed 2026-10-04** (release run for Resolver 1.22.21 / Pro 1.20.27):
+`tmp/fountain_live_test.php` is still 0/20 on two runs; `fountain_resolve()`
+returns NULL after a full autodetect+POST cycle (~6s), and the plugin's scan
+now picks `6089300ccac831e642ad43ebadccbc79cc5798cebe` — a rotated id, same
+chunk, same "first candidate wins" failure. The two probe fixtures (O9)
+still 404 with `Server action not found.`, and a bare
+`POST https://fountain.fm/search` with no/unknown action now answers 405 or
+404 rather than 200. The 11 offline harnesses are green; this remains the
+one live breakage, still untriaged as a fix.
+
+---
+
+## O13. "Flush Music Index data" action on the Cache tab
+
+**Status: On hold** (user deferred 2026-10-03 - declined as part of the
+unified cache-table work of that day, listed at the user's request;
+implement only if re-picked).
+
+**What:** a control on the Cache tab to purge only the Music Index half
+of rows - blank `image_url`, `album_title`, `track_title`, `artist` and
+set `mi_updated_at = NULL` - while keeping `fountain_url` +
+`fountain_updated_at`, because under the shipped cache model (Resolver
+1.22.21 / Pro 1.20.27) the MI half is disposable cache and the link half
+is data. Rows repopulate their MI half on the next view (the blocking
+fill used for a pair with no cached MI data).
+
+**Plan sketch:** a fourth scope beside the existing Clear controls
+(std/Pro Cache tab), `admin_post` handler modelled on
+`handle_clear_cache()`: `check_admin_referer()` ->
+`current_user_can( 'manage_options' )` -> one scoped `UPDATE ... WHERE`
+(never `TRUNCATE`); confirmation wording distinguishes it from
+"Clear all" (which still deletes whole rows, links included); notice
+reports the affected row count. Both plugins, full rename applied.
+
 ---
 
 ## Closed decisions (context only - not work items; do not re-open or re-propose)

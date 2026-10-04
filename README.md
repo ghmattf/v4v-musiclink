@@ -33,7 +33,7 @@ The same functionality as the standard version, plus:
   ```
 - If no parameters are provided in either the shortcode or the URL, a search page is displayed where the user can search musicindex.org and select the album/track to display the regular page.
 - Usage of this plugin version is logged: one row when a visitor picks a result on the search page (the click that generates the shareable URL), plus one row per app-button launch (same date/artist/album/track plus the app that opened). Page renders - URL-driven or hardcoded into a shortcode attribute, shared links included - are never logged, and the raw `album`/`track` guids are never stored, only the titles Music Index returns. Both log beacons are rate-limited per client IP (30/minute per endpoint by default, configurable in the settings), and the log keeps only its newest rows (100,000 by default, also configurable).
-- The admin settings page adds a tab to display the logs (with a **Clear log** button), and another for running reports - totals by artist/album/track (opens) or by music app (launches), with date-range and artist filters.
+- The admin settings page adds a tab to display the logs (with a **Clear log** button), another for running reports - totals by artist/album/track (opens) or by music app (launches), with date-range and artist filters - and a **Cache** tab that lists the cached release rows (with both their Music Index and Fountain.fm timestamps) and lets you edit one row or delete rows / clear the Fountain links.
 - Extras: optional Open Graph / Twitter Card social previews, a share button, and canonical URL fixes for guid'd URLs.
 
 Shortcode: `[musiclink_pro]` (accepts the same `album`/`track` attributes as the standard version).
@@ -51,7 +51,7 @@ Each app can be individually disabled and/or given a custom icon URL under **Set
 
 ## Data source
 
-Music metadata (titles, artist, artwork) comes from the [MusicIndex.org](https://musicindex.org) API (`https://api.musicindex.org/v1`). No API credentials are needed. Results are cached in WordPress transients (12 hours for successes, 1 hour for failures).
+Music metadata (titles, artist, artwork) comes from the [MusicIndex.org](https://musicindex.org) API (`https://api.musicindex.org/v1`). No API credentials are needed. Every album/track pair is stored as one row in the plugin's own `{prefix}v4v_musiclink[_pro]_cache` table, which also holds that pair's resolved Fountain.fm link. Cached metadata is served immediately and refreshed in the background once it is older than 12 hours (configurable, 1–720 hours; refresh only - rows are never evicted, so stale titles keep serving through a Music Index outage). A pair that has never been seen is fetched inline on first render, and failed lookups are remembered separately in WordPress transients (1 hour for definitive misses, 30 seconds for unreliable ones).
 
 ## Development
 

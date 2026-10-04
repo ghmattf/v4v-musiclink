@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.26
+ * Version: 1.20.27
  * Author: Matt Finlay
  *
  * USAGE:
@@ -134,6 +134,20 @@
  * guid at all) with an "Album/Song not found" message, rather than showing
  * broken/empty app buttons.
  *
+ * CACHING: everything a page view needs for one release lives on a single
+ * cache-table row keyed on album/track guid - the Music Index metadata
+ * (titles, artist, artwork) and the resolved Fountain.fm link. Stale
+ * metadata keeps serving while a background refresh runs after the page
+ * has been sent (plain PHP on the shutdown hook - no cron, no queue),
+ * so a Music Index outage can't blank an already-seen release. When
+ * that refresh is triggered is admin-configurable (Settings >
+ * V4V MusicLink Pro, "Music Index refresh", default 12 hours), and only
+ * front-end page renders may trigger it - never the search box, the log
+ * beacons, or the og: preview. Fountain.fm links are permanent: they
+ * never go stale and are never auto-refreshed (blank a link on the
+ * Cache tab to force a re-search). Failure throttles (not-found /
+ * outage) stay in short-lived transients.
+ *
  * Icons are pulled live from each app's own favicon via a favicon service
  * (no logo assets are stored or reproduced by this plugin).
  */
@@ -146,7 +160,11 @@ class V4V_Music_Link_Resolver_Pro {
 
 	const MI_ROOT        = 'https://api.musicindex.org';
 	const MI_API_BASE    = 'https://api.musicindex.org/v1';
-	const CACHE_TTL       = 12 * HOUR_IN_SECONDS;
+	// Default hours between background refreshes of cached Music Index
+	// metadata, before the admin "Music Index refresh" setting (clamped
+	// 1..720 by mi_refresh_interval()). Stale rows keep serving; this only
+	// decides when a background pull is queued.
+	const MI_REFRESH_DEFAULT_HOURS = 12;
 	const FAIL_CACHE_TTL  = HOUR_IN_SECONDS;
 	// Negative cache for failures that do NOT prove the guid is missing
 	// (timeout, DNS error, 5xx, redirect, undecodable body). Long enough to
@@ -154,19 +172,21 @@ class V4V_Music_Link_Resolver_Pro {
 	// masquerading as "Album/Song not found" almost immediately - see
 	// negative_cache_ttl().
 	const SOFT_FAIL_CACHE_TTL = 30;
-	// Bump whenever the shape of what gets cached changes, so old
-	// transients (with different/missing fields) are never served stale.
+	// Namespaces the negative (miss) transients for Music Index lookups,
+	// so a changed miss-policy shape never lets an old remembered failure
+	// be served. Positives live in the cache table now, not transients.
 	const CACHE_SCHEMA_VERSION = 4;
 
 	/**
-	 * Stored-links table schema generation. Bump when the CREATE TABLE
-	 * changes so existing installs run dbDelta() again (see
-	 * maybe_create_stored_links_table()).
+	 * Cache table schema generation. Bump when the CREATE TABLE changes so
+	 * existing installs run dbDelta() again (see maybe_create_cache_table()).
 	 *
-	 * 1 = one row per (app, release) with a single `url` column.
-	 * 2 = one row per release, `url` renamed to a column per app.
+	 * 1 = one row per release holding Music Index metadata (titles, artist,
+	 *     art, mi_updated_at) plus the Fountain link (fountain_url,
+	 *     fountain_updated_at), keyed on lookup_hash. Supersedes the old
+	 *     stored-links table, which is migrated into this one and dropped.
 	 */
-	const LINKS_TABLE_VERSION = 2;
+	const CACHE_TABLE_VERSION = 1;
 
 	/**
 	 * The link column each app stores its resolved URL in, keyed by app
@@ -212,6 +232,28 @@ class V4V_Music_Link_Resolver_Pro {
 	 */
 	private $last_fountain_hits_parsed = false;
 
+	/**
+	 * Whether a stale cache row may queue a background Music Index
+	 * refresh in this request. Default-deny: only render() turns it on,
+	 * so the search box, the log beacons and the og: preview can never
+	 * trigger a refresh (they may still fill an absent row).
+	 */
+	private $mi_refresh_allowed = false;
+
+	/**
+	 * Rows queued for a background Music Index pull this request, as
+	 * hash => array( 'kind' => 'feed'|'track', 'album' => ..., 'track' => ... ).
+	 * Drained by run_queued_mi_refresh() on the shutdown hook.
+	 */
+	private $mi_refresh_pending = array();
+
+	/**
+	 * Memoized cache-row reads for this request: lookup_hash => row object
+	 * (or false when no row exists), so one render makes at most one query
+	 * per album/track pair no matter how often the row is consulted.
+	 */
+	private $row_memo = array();
+
 	public function __construct() {
 		add_shortcode( 'musiclink_pro', array( $this, 'render' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
@@ -224,9 +266,12 @@ class V4V_Music_Link_Resolver_Pro {
 		add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
 		add_action( 'admin_post_v4v_musiclink_pro_clear_log', array( $this, 'handle_clear_log' ) );
-		add_action( 'admin_post_v4v_musiclink_pro_update_stored_link', array( $this, 'handle_update_stored_link' ) );
-		add_action( 'admin_post_v4v_musiclink_pro_delete_stored_link', array( $this, 'handle_delete_stored_link' ) );
-		add_action( 'admin_post_v4v_musiclink_pro_clear_stored_links', array( $this, 'handle_clear_stored_links' ) );
+		add_action( 'admin_post_v4v_musiclink_pro_update_cache_row', array( $this, 'handle_update_cache_row' ) );
+		add_action( 'admin_post_v4v_musiclink_pro_delete_cache_row', array( $this, 'handle_delete_cache_row' ) );
+		add_action( 'admin_post_v4v_musiclink_pro_clear_cache', array( $this, 'handle_clear_cache' ) );
+		// Background Music Index refreshes, after the page has gone out
+		// (priority 10 lets wp_ob_end_flush_all at priority 1 flush first).
+		add_action( 'shutdown', array( $this, 'run_queued_mi_refresh' ) );
 
 		$mode = $this->get_social_preview_mode();
 		if ( 'off' === $mode ) {
@@ -244,7 +289,7 @@ class V4V_Music_Link_Resolver_Pro {
 		}
 
 		$this->maybe_create_log_table();
-		$this->maybe_create_stored_links_table();
+		$this->maybe_create_cache_table();
 	}
 
 	/**
@@ -1080,57 +1125,111 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/* ------------------------------------------------------------------------
-	 * Stored links
+	 * Cache table - Music Index metadata and the Fountain link, one row per
+	 * release
 	 *
-	 * A table of resolved app links, one row per release: the album/track
-	 * guids are the identity, and each app that can store one owns a link
-	 * column on that row (`fountain_url` today - see LINK_COLUMNS). The
-	 * Fountain block consults it first, so once a link has been resolved it
-	 * no longer depends on Fountain's `next-action` hash, a transient, or
-	 * the background self-heal - which is exactly the chain that was
-	 * serving a generic fountain.fm link for 30+ minutes after a
-	 * self-heal had already succeeded.
+	 * The row's identity is the album/track pair via lookup_hash, and it
+	 * carries BOTH halves of what a render needs:
 	 *
-	 * Rule: a row with a non-empty link is used verbatim - no search, no
-	 * write-back - so a link corrected by hand can never be silently
-	 * reverted. A missing row, or one whose link was blanked, runs the
-	 * normal search and then upserts the result.
+	 * - Music Index half (album_title, track_title, artist, image_url,
+	 *   mi_updated_at): goes stale after the admin-set interval
+	 *   (mi_refresh_interval(), default 12h) and is refreshed in the
+	 *   BACKGROUND while the stale row keeps serving (stale-while-
+	 *   revalidate). Rows are never evicted, at any age, at any setting;
+	 *   a Music Index outage therefore cannot turn an already-seen
+	 *   release into "Album/Song not found".
+	 * - Fountain half (fountain_url, fountain_updated_at): permanent.
+	 *   A row with a non-empty link is used verbatim - no search, no
+	 *   write-back - so a link corrected by hand can never be silently
+	 *   reverted; a missing row, or one whose link was blanked, runs the
+	 *   normal search and then upserts the result.
+	 *
+	 * Refreshes are queued only from render() - never from the search box,
+	 * the log beacons or the og: preview (all default-deny under
+	 * $mi_refresh_allowed) - and run after the response is flushed, on the
+	 * shutdown hook: no cron, no queue option. Absent rows may still be
+	 * filled synchronously from any context (same API traffic as the old
+	 * transient fill), because search and the beacons need titles.
 	 * --------------------------------------------------------------------- */
 
 	/**
-	 * Creates the stored-links table if it doesn't exist yet. Checked on
-	 * every load behind a cheap option flag rather than relying solely on
+	 * Creates the cache table if it doesn't exist yet, migrating the old
+	 * stored-links table into it on the way. Checked on every load behind
+	 * a cheap option flag rather than relying solely on
 	 * register_activation_hook, since updates to this plugin are typically
 	 * deployed by overwriting the file in place without a
 	 * deactivate/reactivate cycle - which means a normal activation hook
 	 * would never fire for this change. Same pattern as the log table.
+	 *
+	 * Each step is individually re-runnable, so a run interrupted half-way
+	 * resumes on the next load instead of failing.
 	 */
-	private function maybe_create_stored_links_table() {
-		if ( self::LINKS_TABLE_VERSION === (int) get_option( 'v4v_musiclink_pro_stored_links_table_version' ) ) {
+	private function maybe_create_cache_table() {
+		if ( self::CACHE_TABLE_VERSION === (int) get_option( 'v4v_musiclink_pro_cache_table_version' ) ) {
 			return;
 		}
 
-		// Which columns the table actually has decides the rewrite, not
-		// the stored version: a lost or never-written option would
-		// otherwise strand every live row on the old shape.
-		self::migrate_stored_links_table();
+		// A not-yet-v2 OLD table still has `url`/`app` columns and the
+		// copy below needs `fountain_url`, so the legacy fixup runs first.
+		// Its SHOW-COLUMNS guards no-op when the old table is absent.
+		self::migrate_legacy_links_table();
 
-		self::create_stored_links_table();
-		update_option( 'v4v_musiclink_pro_stored_links_table_version', self::LINKS_TABLE_VERSION );
+		self::create_cache_table();
+
+		// Copy the old table over (exact name match - never SHOW TABLES
+		// LIKE, whose "_" is a single-character wildcard).
+		global $wpdb;
+		$old_table  = $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
+		$new_table  = $wpdb->prefix . 'v4v_musiclink_pro_cache';
+		$tables     = $wpdb->get_col( 'SHOW TABLES' );
+		$tables     = is_array( $tables ) ? $tables : array();
+		$old_exists = in_array( $old_table, $tables, true );
+
+		if ( $old_exists ) {
+			// The hash formula is unchanged, so rows copy verbatim;
+			// image_url stays '' and mi_updated_at stays NULL, so the
+			// first view serves the copied titles and queues the
+			// background pull that fills art + timestamp (zero blocking
+			// on upgrade). fountain_updated_at is the old updated_at.
+			$copy_sql = "INSERT IGNORE INTO {$new_table}
+				(lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, fountain_updated_at)
+				SELECT lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at
+				FROM {$old_table}";
+
+			$wpdb->query( $copy_sql );
+
+			$old_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$old_table}" );
+			$new_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$new_table}" );
+
+			if ( $old_count !== $new_count ) {
+				// One retry for a copy interrupted mid-flight, then drop
+				// regardless: a row written in the copy window is lost and
+				// re-resolves on its next view - cache semantics.
+				$wpdb->query( $copy_sql );
+			}
+
+			$wpdb->query( "DROP TABLE IF EXISTS {$old_table}" );
+		}
+
+		delete_option( 'v4v_musiclink_pro_stored_links_table_version' );
+		update_option( 'v4v_musiclink_pro_cache_table_version', self::CACHE_TABLE_VERSION );
 	}
 
 	/**
-	 * One-time v1 -> v2 rewrite of an existing table: carry the resolved
-	 * link into the per-app column, collapse any pair of rows that differed
-	 * only by app, rebuild the hash for the new row identity, then drop the
-	 * two columns v1 needed. Every step is guarded by the columns really
-	 * present, so a run interrupted half-way resumes on the next load
-	 * instead of failing, and a table that was never at v1 no-ops.
+	 * One-time v1 -> v2 rewrite of the legacy stored-links table: carry
+	 * the resolved link into the per-app column, collapse any pair of rows
+	 * that differed only by app, rebuild the hash for the new row
+	 * identity, then drop the two columns v1 needed. Every step is
+	 * guarded by the columns really present, so a run interrupted
+	 * half-way resumes on the next load instead of failing, and a table
+	 * that was never at v1 no-ops.
 	 *
 	 * Nothing is re-resolved here: the link is copied, so a release whose
-	 * URL a page view already earned keeps it across the upgrade.
+	 * URL a page view already earned keeps it across the upgrade. This
+	 * only ever touches the OLD table - the cache copy happens in
+	 * maybe_create_cache_table() afterwards.
 	 */
-	private static function migrate_stored_links_table() {
+	private static function migrate_legacy_links_table() {
 		global $wpdb;
 		$table = $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
 
@@ -1163,7 +1262,7 @@ class V4V_Music_Link_Resolver_Pro {
 		);
 
 		// The row identity lost the app, so rebuild the hash to match
-		// stored_link_hash(). Runs before the drops, while both old
+		// cache_row_hash(). Runs before the drops, while both old
 		// columns are still available for the dedupe above.
 		$wpdb->query( "UPDATE {$table} SET lookup_hash = SHA1( CONCAT( album_guid, '|', track_guid ) )" );
 
@@ -1175,9 +1274,9 @@ class V4V_Music_Link_Resolver_Pro {
 		}
 	}
 
-	private static function create_stored_links_table() {
+	private static function create_cache_table() {
 		global $wpdb;
-		$table_name      = $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
+		$table_name      = $wpdb->prefix . 'v4v_musiclink_pro_cache';
 		$charset_collate = $wpdb->get_charset_collate();
 
 		$sql = "CREATE TABLE {$table_name} (
@@ -1188,8 +1287,10 @@ class V4V_Music_Link_Resolver_Pro {
 			album_title VARCHAR(255) NOT NULL DEFAULT '',
 			track_title VARCHAR(255) NOT NULL DEFAULT '',
 			artist VARCHAR(255) NOT NULL DEFAULT '',
+			image_url TEXT NOT NULL,
 			fountain_url TEXT NOT NULL,
-			updated_at DATETIME NOT NULL,
+			mi_updated_at DATETIME NULL,
+			fountain_updated_at DATETIME NOT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY lookup_hash (lookup_hash)
 		) {$charset_collate};";
@@ -1198,14 +1299,14 @@ class V4V_Music_Link_Resolver_Pro {
 		dbDelta( $sql );
 	}
 
-	private function stored_links_table() {
+	private function cache_table() {
 		global $wpdb;
 
-		return $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
+		return $wpdb->prefix . 'v4v_musiclink_pro_cache';
 	}
 
 	/**
-	 * The identity of a stored link: sha1( album_guid|track_guid ).
+	 * The identity of a cache row: sha1( album_guid|track_guid ).
 	 *
 	 * The guids themselves are deliberately NOT part of any index.
 	 * Music Index ids are free-form and guard_guid() allows up to 256
@@ -1217,60 +1318,83 @@ class V4V_Music_Link_Resolver_Pro {
 	 * stay in plain columns for display and filtering. Apps are not part
 	 * of the identity at all: they share the row.
 	 */
-	private function stored_link_hash( $album, $track ) {
+	private function cache_row_hash( $album, $track ) {
 		return sha1( $album . '|' . $track );
 	}
 
 	/**
-	 * The stored link for an exact album/track pair, or '' when there is
-	 * no row OR the row's link was blanked (an admin blanking the field is
-	 * the documented way to force a fresh search). Returning '' for both
-	 * cases means the caller only ever needs one branch: '' -> search.
+	 * The cache row for an exact album/track pair, memoized per request
+	 * (false when no row exists), so the Music Index lookups and the
+	 * Fountain link read make at most one query per pair per render.
+	 * Writers drop their row from the memo so a later read in the same
+	 * request re-queries instead of serving what was just superseded.
 	 */
-	private function get_stored_link( $album, $track ) {
+	private function cache_get_row( $album, $track ) {
 		global $wpdb;
-		$table = $this->stored_links_table();
+		$table = $this->cache_table();
+		$hash  = $this->cache_row_hash( $album, $track );
 
-		$url = $wpdb->get_var(
+		if ( array_key_exists( $hash, $this->row_memo ) ) {
+			return $this->row_memo[ $hash ];
+		}
+
+		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				"SELECT fountain_url FROM {$table} WHERE lookup_hash = %s LIMIT 1",
-				$this->stored_link_hash( $album, $track )
+				"SELECT * FROM {$table} WHERE lookup_hash = %s LIMIT 1",
+				$hash
 			)
 		);
 
-		return is_string( $url ) ? $url : '';
+		$this->row_memo[ $hash ] = $row ? $row : false;
+
+		return $this->row_memo[ $hash ];
 	}
 
 	/**
-	 * Persists a freshly resolved link plus the release metadata it was
-	 * resolved for. Only ever called from the path that had no usable
-	 * stored link, so an entry already in use cannot be overwritten here.
+	 * The cached Fountain link for an exact album/track pair, or '' when
+	 * there is no row OR the row's link was blanked (an admin blanking
+	 * the field is the documented way to force a fresh search).
+	 * Returning '' for both cases means the caller only ever needs one
+	 * branch: '' -> search.
+	 */
+	private function get_cached_fountain_url( $album, $track ) {
+		$row = $this->cache_get_row( $album, $track );
+
+		return ( $row && is_string( $row->fountain_url ) ) ? $row->fountain_url : '';
+	}
+
+	/**
+	 * Persists a freshly resolved Fountain link plus the guids/titles it
+	 * was resolved for. Only ever called from the path that had no usable
+	 * cached link, so a link already in use cannot be overwritten here.
 	 *
-	 * ON DUPLICATE KEY UPDATE rather than SELECT-then-INSERT: two
-	 * concurrent first renders of the same release would otherwise race
-	 * into a duplicate-key failure on the unique lookup_hash.
+	 * Link-scoped on purpose: guids/titles only apply on insert, and the
+	 * ON DUPLICATE KEY UPDATE touches fountain_url/fountain_updated_at
+	 * ONLY - never the Music Index half (mi_updated_at), which this
+	 * function does not own. ON DUPLICATE KEY rather than
+	 * SELECT-then-INSERT: two concurrent first renders of the same
+	 * release would otherwise race into a duplicate-key failure on the
+	 * unique lookup_hash.
 	 *
-	 * updated_at stores site-local time (current_time('mysql')), and the
-	 * admin table prints it raw - converting it again with
+	 * fountain_updated_at stores site-local time (current_time('mysql')),
+	 * and the admin table prints it raw - converting it again with
 	 * get_date_from_gmt() would shift it by the site's GMT offset (the
 	 * display half of O3).
 	 */
-	private function store_stored_link( $album, $track, $url, $album_title, $track_title, $artist ) {
+	private function store_fountain_link( $album, $track, $url, $album_title, $track_title, $artist ) {
 		global $wpdb;
-		$table = $this->stored_links_table();
+		$table = $this->cache_table();
+		$hash  = $this->cache_row_hash( $album, $track );
 
 		$wpdb->query(
 			$wpdb->prepare(
 				"INSERT INTO {$table}
-					(lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at)
-				VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+					(lookup_hash, album_guid, track_guid, album_title, track_title, artist, image_url, fountain_url, fountain_updated_at)
+				VALUES (%s, %s, %s, %s, %s, %s, '', %s, %s)
 				ON DUPLICATE KEY UPDATE
 					fountain_url = VALUES(fountain_url),
-					album_title = VALUES(album_title),
-					track_title = VALUES(track_title),
-					artist = VALUES(artist),
-					updated_at = VALUES(updated_at)",
-				$this->stored_link_hash( $album, $track ),
+					fountain_updated_at = VALUES(fountain_updated_at)",
+				$hash,
 				$album,
 				$track,
 				$album_title,
@@ -1280,6 +1404,8 @@ class V4V_Music_Link_Resolver_Pro {
 				current_time( 'mysql' )
 			)
 		);
+
+		unset( $this->row_memo[ $hash ] );
 	}
 
 	/**
@@ -1308,17 +1434,18 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * The fields the Stored links tab filters on, in display order.
+	 * The fields the Cache tab filters on, in display order.
 	 *
 	 * One list serves both the filter form and the URL that carries those
 	 * filters across pagination and handler redirects, so the two cannot
 	 * drift apart: the form writes `sl_` + key, the URL reads those same
 	 * keys back.
 	 */
-	private function stored_link_filters() {
+	private function cache_filters() {
 		return array(
 			// Display order: the release, then its link, then when it was
-			// last written - the table follows the same order.
+			// last written - the table follows the same order. The art
+			// URL and the two timestamps are deliberately not filterable.
 			'artist'       => __( 'Artist', 'v4v-musiclink-pro' ),
 			'album_title'  => __( 'Album title', 'v4v-musiclink-pro' ),
 			'track_title'  => __( 'Track title', 'v4v-musiclink-pro' ),
@@ -1331,16 +1458,16 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * URL of the Stored links tab, carrying any active filters so
-	 * pagination keeps the admin's current view.
+	 * URL of the Cache tab, carrying any active filters so pagination
+	 * keeps the admin's current view.
 	 */
-	private function stored_links_admin_url( $extra = array() ) {
+	private function cache_admin_url( $extra = array() ) {
 		$args = array(
 			'page' => 'v4v-musiclink-pro',
-			'tab'  => 'links',
+			'tab'  => 'cache',
 		);
 
-		foreach ( array_keys( $this->stored_link_filters() ) as $field ) {
+		foreach ( array_keys( $this->cache_filters() ) as $field ) {
 			$key = 'sl_' . $field;
 			if ( ! isset( $_GET[ $key ] ) ) {
 				continue;
@@ -1360,10 +1487,10 @@ class V4V_Music_Link_Resolver_Pro {
 	 * they came from, with its filters intact (the referer carries them),
 	 * falling back to the plain tab URL when there is no referer to reuse.
 	 */
-	private function redirect_to_stored_links( $extra = array() ) {
+	private function redirect_to_cache_tab( $extra = array() ) {
 		$base = wp_get_referer();
 		if ( ! $base || false === strpos( $base, 'page=v4v-musiclink-pro' ) ) {
-			$base = $this->stored_links_admin_url();
+			$base = $this->cache_admin_url();
 		}
 
 		wp_safe_redirect( add_query_arg( $extra, $base ) );
@@ -1371,22 +1498,22 @@ class V4V_Music_Link_Resolver_Pro {
 	}
 
 	/**
-	 * Contents of the "Stored links" tab: a per-field filter row, the
-	 * matching rows with inline editing and per-row removal, and a clear
-	 * control scoped either to the whole table or to one app. Every write
-	 * goes through the admin-post.php handlers below; this view only reads
-	 * and renders.
+	 * Contents of the "Cache" tab: a per-field filter row, the matching
+	 * rows (Music Index metadata + Fountain link, with inline link
+	 * editing and per-row removal), and a clear control scoped either to
+	 * the whole table or to one app. Every write goes through the
+	 * admin-post.php handlers below; this view only reads and renders.
 	 */
-	private function render_stored_links_tab_content() {
+	private function render_cache_tab_content() {
 		global $wpdb;
 
-		$table    = $this->stored_links_table();
+		$table    = $this->cache_table();
 		$per_page = 50;
 
 		// Field => column label, in display order. The keys are literals
-		// from stored_link_filters() - never request data - so they are
+		// from cache_filters() - never request data - so they are
 		// safe to interpolate into SQL.
-		$filter_fields = $this->stored_link_filters();
+		$filter_fields = $this->cache_filters();
 
 		$filters = array();
 		foreach ( array_keys( $filter_fields ) as $field ) {
@@ -1420,9 +1547,9 @@ class V4V_Music_Link_Resolver_Pro {
 
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT id, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at
+				"SELECT id, album_guid, track_guid, album_title, track_title, artist, image_url, fountain_url, mi_updated_at, fountain_updated_at
 				FROM {$table}{$where_sql}
-				ORDER BY updated_at DESC, id DESC
+				ORDER BY fountain_updated_at DESC, id DESC
 				LIMIT %d OFFSET %d",
 				array_merge( $params, array( $per_page, ( $paged - 1 ) * $per_page ) )
 			)
@@ -1432,7 +1559,7 @@ class V4V_Music_Link_Resolver_Pro {
 		// them from, since rows are shared across apps (one per release).
 		$link_apps = array_keys( self::LINK_COLUMNS );
 
-		$plain_tab_url = admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=links' );
+		$plain_tab_url = admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=cache' );
 		?>
 		<?php if ( isset( $_GET['sl_links_cleared'], $_GET['sl_cleared_app'] ) ) : ?>
 			<?php // Per-app clear: the link column was blanked, the rows stay. ?>
@@ -1446,15 +1573,15 @@ class V4V_Music_Link_Resolver_Pro {
 		<?php elseif ( isset( $_GET['sl_cleared'] ) ) : ?>
 			<?php // Clear all: the rows themselves are gone. ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php printf( esc_html__( '%s stored row(s) removed.', 'v4v-musiclink-pro' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
+				<p><?php printf( esc_html__( '%s cache row(s) removed.', 'v4v-musiclink-pro' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_saved'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php esc_html_e( 'Stored link updated.', 'v4v-musiclink-pro' ); ?></p>
+				<p><?php esc_html_e( 'Fountain.fm link updated.', 'v4v-musiclink-pro' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_deleted'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php esc_html_e( 'Stored link removed. It will be created again if the release is viewed and its link resolves.', 'v4v-musiclink-pro' ); ?></p>
+				<p><?php esc_html_e( 'Cache row removed. It will be created again if the release is viewed again.', 'v4v-musiclink-pro' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_error'] ) ) : ?>
 			<div class="notice notice-error is-dismissible">
@@ -1463,12 +1590,12 @@ class V4V_Music_Link_Resolver_Pro {
 		<?php endif; ?>
 
 		<p class="description">
-			<?php esc_html_e( 'Music apps that do not support direct access via album/track GUID can be saved here.', 'v4v-musiclink-pro' ); ?>
+			<?php esc_html_e( 'One row per release: cached Music Index metadata (titles, artist, artwork) plus the resolved Fountain.fm link. Metadata refreshes in the background on the interval set under Settings ("Music Index refresh") while stale rows keep serving; links are permanent until cleared or edited here.', 'v4v-musiclink-pro' ); ?>
 		</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:1em 0;">
 			<input type="hidden" name="page" value="v4v-musiclink-pro" />
-			<input type="hidden" name="tab" value="links" />
+			<input type="hidden" name="tab" value="cache" />
 			<?php foreach ( $filter_fields as $field => $label ) : ?>
 				<label style="flex:1 1 130px; min-width:110px;">
 					<span style="display:block;"><?php echo esc_html( $label ); ?></span>
@@ -1480,14 +1607,14 @@ class V4V_Music_Link_Resolver_Pro {
 		</form>
 
 		<?php if ( $total > 0 ) : ?>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="var label = this.scope.options[ this.scope.selectedIndex ].text; return confirm( 'all' === this.scope.value ? '<?php echo esc_js( __( 'Clear all stored links? Every row is removed - hand-edited links included - and each re-resolves when its release is viewed again.', 'v4v-musiclink-pro' ) ); ?>' : label + ' <?php echo esc_js( __( 'The rows stay, but the links are blanked and re-resolve when their releases are viewed again.', 'v4v-musiclink-pro' ) ); ?>' );">
-				<input type="hidden" name="action" value="v4v_musiclink_pro_clear_stored_links" />
-				<?php wp_nonce_field( 'v4v_musiclink_pro_clear_stored_links' ); ?>
-				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear stored links:', 'v4v-musiclink-pro' ); ?></label>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="var label = this.scope.options[ this.scope.selectedIndex ].text; return confirm( 'all' === this.scope.value ? '<?php echo esc_js( __( 'Clear all cached rows? Every row is removed - hand-edited links included - and each release re-resolves when it is viewed again.', 'v4v-musiclink-pro' ) ); ?>' : label + ' <?php echo esc_js( __( 'The rows stay, but those links are blanked and re-resolve when their releases are viewed again.', 'v4v-musiclink-pro' ) ); ?>' );">
+				<input type="hidden" name="action" value="v4v_musiclink_pro_clear_cache" />
+				<?php wp_nonce_field( 'v4v_musiclink_pro_clear_cache' ); ?>
+				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear cache:', 'v4v-musiclink-pro' ); ?></label>
 				<select name="scope" id="v4v-sl-clear-scope">
-					<option value="all"><?php esc_html_e( 'Clear all stored links', 'v4v-musiclink-pro' ); ?></option>
+					<option value="all"><?php esc_html_e( 'Clear all cached rows', 'v4v-musiclink-pro' ); ?></option>
 					<?php foreach ( $link_apps as $app_slug ) : ?>
-						<option value="<?php echo esc_attr( $app_slug ); ?>"><?php printf( esc_html__( 'Clear %s stored links', 'v4v-musiclink-pro' ), esc_html( $this->app_display_label( $app_slug ) ) ); ?></option>
+						<option value="<?php echo esc_attr( $app_slug ); ?>"><?php printf( esc_html__( 'Clear %s links', 'v4v-musiclink-pro' ), esc_html( $this->app_display_label( $app_slug ) ) ); ?></option>
 					<?php endforeach; ?>
 				</select>
 				<button type="submit" class="button"><?php esc_html_e( 'Clear', 'v4v-musiclink-pro' ); ?></button>
@@ -1495,14 +1622,14 @@ class V4V_Music_Link_Resolver_Pro {
 		<?php endif; ?>
 
 		<p>
-			<?php printf( esc_html__( '%s stored link(s).', 'v4v-musiclink-pro' ), esc_html( number_format_i18n( $total ) ) ); ?>
+			<?php printf( esc_html__( '%s cached row(s).', 'v4v-musiclink-pro' ), esc_html( number_format_i18n( $total ) ) ); ?>
 			<?php if ( $pages > 1 ) : ?>
 				<?php if ( $paged > 1 ) : ?>
-					<a class="button button-small" href="<?php echo esc_url( $this->stored_links_admin_url( array( 'sl_paged' => $paged - 1 ) ) ); ?>">&laquo;</a>
+					<a class="button button-small" href="<?php echo esc_url( $this->cache_admin_url( array( 'sl_paged' => $paged - 1 ) ) ); ?>">&laquo;</a>
 				<?php endif; ?>
 				<span class="paging-input"><?php echo esc_html( number_format_i18n( $paged ) ); ?> of <?php echo esc_html( number_format_i18n( $pages ) ); ?></span>
 				<?php if ( $paged < $pages ) : ?>
-					<a class="button button-small" href="<?php echo esc_url( $this->stored_links_admin_url( array( 'sl_paged' => $paged + 1 ) ) ); ?>">&raquo;</a>
+					<a class="button button-small" href="<?php echo esc_url( $this->cache_admin_url( array( 'sl_paged' => $paged + 1 ) ) ); ?>">&raquo;</a>
 				<?php endif; ?>
 			<?php endif; ?>
 		</p>
@@ -1515,14 +1642,16 @@ class V4V_Music_Link_Resolver_Pro {
 					<th><?php esc_html_e( 'Track title', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Album GUID', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclink-pro' ); ?></th>
+					<th><?php esc_html_e( 'Art', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></th>
-					<th><?php esc_html_e( 'Updated', 'v4v-musiclink-pro' ); ?></th>
+					<th><?php esc_html_e( 'MI updated', 'v4v-musiclink-pro' ); ?></th>
+					<th><?php esc_html_e( 'Fountain updated', 'v4v-musiclink-pro' ); ?></th>
 					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclink-pro' ); ?></span></th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
-					<tr><td colspan="8"><?php esc_html_e( 'No stored links match.', 'v4v-musiclink-pro' ); ?></td></tr>
+					<tr><td colspan="10"><?php esc_html_e( 'No cached rows match.', 'v4v-musiclink-pro' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
@@ -1532,35 +1661,43 @@ class V4V_Music_Link_Resolver_Pro {
 							<td class="code"><?php echo esc_html( $row->album_guid ); ?></td>
 							<td class="code"><?php echo esc_html( $row->track_guid ? $row->track_guid : '—' ); ?></td>
 							<td>
+								<?php if ( $row->image_url ) : ?>
+									<a href="<?php echo esc_url( $row->image_url ); ?>" target="_blank" rel="noopener noreferrer">
+										<img src="<?php echo esc_url( $row->image_url ); ?>" alt="" width="40" height="40" loading="lazy" style="display:block; width:40px; height:40px; object-fit:cover; border-radius:4px;" />
+									</a>
+								<?php endif; ?>
+							</td>
+							<td>
 								<?php if ( $row->fountain_url ) : ?>
 									<a href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $row->fountain_url ); ?></a>
 								<?php else : ?>
 									<em><?php esc_html_e( 'empty - will re-search', 'v4v-musiclink-pro' ); ?></em>
 								<?php endif; ?>
 							</td>
-							<td><?php echo esc_html( $row->updated_at ); ?></td>
+							<td><?php echo esc_html( $row->mi_updated_at ? $row->mi_updated_at : '—' ); ?></td>
+							<td><?php echo esc_html( $row->fountain_updated_at ); ?></td>
 							<td style="white-space:nowrap;">
 								<button type="button" class="button button-small v4v-sl-edit-toggle" data-id="<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Edit', 'v4v-musiclink-pro' ); ?></button>
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
-									<input type="hidden" name="action" value="v4v_musiclink_pro_delete_stored_link" />
+									<input type="hidden" name="action" value="v4v_musiclink_pro_delete_cache_row" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
-									<?php wp_nonce_field( 'v4v_musiclink_pro_delete_stored_link' ); ?>
-									<button type="submit" class="button button-small" onclick="return confirm('<?php echo esc_js( __( 'Remove this stored link? The next page view will search for it again.', 'v4v-musiclink-pro' ) ); ?>');"><?php esc_html_e( 'Remove', 'v4v-musiclink-pro' ); ?></button>
+									<?php wp_nonce_field( 'v4v_musiclink_pro_delete_cache_row' ); ?>
+									<button type="submit" class="button button-small" onclick="return confirm('<?php echo esc_js( __( 'Remove this cached row? The release re-resolves the next time it is viewed.', 'v4v-musiclink-pro' ) ); ?>');"><?php esc_html_e( 'Remove', 'v4v-musiclink-pro' ); ?></button>
 								</form>
 							</td>
 						</tr>
 						<tr id="v4v-sl-edit-<?php echo (int) $row->id; ?>" hidden>
-							<td colspan="8">
+							<td colspan="10">
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0.5em 0;">
-									<input type="hidden" name="action" value="v4v_musiclink_pro_update_stored_link" />
+									<input type="hidden" name="action" value="v4v_musiclink_pro_update_cache_row" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
 									<?php // Which link column is being edited; whitelisted against LINK_COLUMNS. ?>
 									<input type="hidden" name="link_field" value="fountain" />
-									<?php wp_nonce_field( 'v4v_musiclink_pro_update_stored_link' ); ?>
+									<?php wp_nonce_field( 'v4v_musiclink_pro_update_cache_row' ); ?>
 									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></label>
 									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->fountain_url ); ?>" style="flex:1 1 320px;" />
 									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclink-pro' ); ?></button>
-									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again.', 'v4v-musiclink-pro' ); ?></span>
+									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again. Music Index fields are read-only - the next refresh overwrites them.', 'v4v-musiclink-pro' ); ?></span>
 								</form>
 							</td>
 						</tr>
@@ -1581,19 +1718,21 @@ class V4V_Music_Link_Resolver_Pro {
 
 	/**
 	 * admin-post.php handler behind each row's Save button: rewrites that
-	 * row's link (or blanks it, forcing a re-search) after nonce and
-	 * capability checks, and only accepts an https URL on the app's own
-	 * domain. A blank link is a valid, deliberate value.
+	 * row's Fountain link (or blanks it, forcing a re-search) after nonce
+	 * and capability checks, and only accepts an https URL on the app's
+	 * own domain. A blank link is a valid, deliberate value. The Music
+	 * Index half of the row is untouched (and read-only in the UI) - the
+	 * next background refresh overwrites it anyway.
 	 */
-	public function handle_update_stored_link() {
-		check_admin_referer( 'v4v_musiclink_pro_update_stored_link' );
+	public function handle_update_cache_row() {
+		check_admin_referer( 'v4v_musiclink_pro_update_cache_row' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to edit stored links.', 'v4v-musiclink-pro' ) );
+			wp_die( esc_html__( 'You are not allowed to edit cache rows.', 'v4v-musiclink-pro' ) );
 		}
 
 		global $wpdb;
-		$table = $this->stored_links_table();
+		$table = $this->cache_table();
 		$id    = isset( $_POST['link_id'] ) ? (int) $_POST['link_id'] : 0;
 		$url   = isset( $_POST['url'] ) ? esc_url_raw( trim( wp_unslash( $_POST['url'] ) ) ) : '';
 
@@ -1612,8 +1751,8 @@ class V4V_Music_Link_Resolver_Pro {
 			$wpdb->update(
 				$table,
 				array(
-					$column      => $url,
-					'updated_at' => current_time( 'mysql' ),
+					$column               => $url,
+					'fountain_updated_at' => current_time( 'mysql' ),
 				),
 				array( 'id' => $id ),
 				array( '%s', '%s' ),
@@ -1621,7 +1760,7 @@ class V4V_Music_Link_Resolver_Pro {
 			);
 		}
 
-		$this->redirect_to_stored_links( $valid ? array( 'sl_saved' => '1' ) : array( 'sl_error' => '1' ) );
+		$this->redirect_to_cache_tab( $valid ? array( 'sl_saved' => '1' ) : array( 'sl_error' => '1' ) );
 	}
 
 	/**
@@ -1629,41 +1768,41 @@ class V4V_Music_Link_Resolver_Pro {
 	 * one row (never the table), so the release simply re-resolves the
 	 * next time it is viewed.
 	 */
-	public function handle_delete_stored_link() {
-		check_admin_referer( 'v4v_musiclink_pro_delete_stored_link' );
+	public function handle_delete_cache_row() {
+		check_admin_referer( 'v4v_musiclink_pro_delete_cache_row' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to remove stored links.', 'v4v-musiclink-pro' ) );
+			wp_die( esc_html__( 'You are not allowed to remove cache rows.', 'v4v-musiclink-pro' ) );
 		}
 
 		$id = isset( $_POST['link_id'] ) ? (int) $_POST['link_id'] : 0;
 		if ( $id ) {
 			global $wpdb;
-			$wpdb->delete( $this->stored_links_table(), array( 'id' => $id ), array( '%d' ) );
+			$wpdb->delete( $this->cache_table(), array( 'id' => $id ), array( '%d' ) );
 		}
 
-		$this->redirect_to_stored_links( array( 'sl_deleted' => '1' ) );
+		$this->redirect_to_cache_tab( array( 'sl_deleted' => '1' ) );
 	}
 
 	/**
 	 * admin-post.php handler behind the Clear control: empties the whole
-	 * table, or - for a single app - blanks only the link column and leaves
-	 * every other field of those rows in place (a cleared row stays listed
-	 * as "empty - will re-search" and simply re-resolves on its next view).
-	 * Returns to the tab with a count either way. The DELETE for Clear all
-	 * rather than TRUNCATE: it needs only the DELETE privilege, so it also
-	 * works on restricted WordPress database users (same reasoning as the
-	 * view log's clear handler above).
+	 * table, or - for a single app - blanks only the link column and
+	 * leaves every other field of those rows in place (a cleared row
+	 * stays listed as "empty - will re-search" and simply re-resolves on
+	 * its next view). Returns to the tab with a count either way. The
+	 * DELETE for Clear all rather than TRUNCATE: it needs only the DELETE
+	 * privilege, so it also works on restricted WordPress database users
+	 * (same reasoning as the view log's clear handler above).
 	 */
-	public function handle_clear_stored_links() {
-		check_admin_referer( 'v4v_musiclink_pro_clear_stored_links' );
+	public function handle_clear_cache() {
+		check_admin_referer( 'v4v_musiclink_pro_clear_cache' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to clear stored links.', 'v4v-musiclink-pro' ) );
+			wp_die( esc_html__( 'You are not allowed to clear the cache.', 'v4v-musiclink-pro' ) );
 		}
 
 		global $wpdb;
-		$table = $this->stored_links_table();
+		$table = $this->cache_table();
 		$scope = isset( $_POST['scope'] ) ? sanitize_key( wp_unslash( $_POST['scope'] ) ) : 'all';
 
 		if ( 'all' === $scope ) {
@@ -1671,25 +1810,26 @@ class V4V_Music_Link_Resolver_Pro {
 			// (including their guids, titles and any hand-edited link).
 			$cleared = (int) $wpdb->query( "DELETE FROM {$table}" );
 
-			$this->redirect_to_stored_links( array( 'sl_cleared' => (string) $cleared ) );
+			$this->redirect_to_cache_tab( array( 'sl_cleared' => (string) $cleared ) );
 		} elseif ( isset( self::LINK_COLUMNS[ $scope ] ) ) {
-			// Blank that app's link column only: guids, titles and artist
-			// survive on the shared row, and updated_at records the clear
-			// the same way a hand edit does.
+			// Blank that app's link column only: guids, titles, artist,
+			// art and the MI timestamp survive on the shared row, and
+			// fountain_updated_at records the clear the same way a hand
+			// edit does.
 			$column  = self::LINK_COLUMNS[ $scope ];
 			$cleared = (int) $wpdb->query(
 				$wpdb->prepare(
-					"UPDATE {$table} SET {$column} = '', updated_at = %s WHERE {$column} <> ''",
+					"UPDATE {$table} SET {$column} = '', fountain_updated_at = %s WHERE {$column} <> ''",
 					current_time( 'mysql' )
 				)
 			);
 
-			$this->redirect_to_stored_links( array(
+			$this->redirect_to_cache_tab( array(
 				'sl_links_cleared' => (string) $cleared,
 				'sl_cleared_app'   => $scope,
 			) );
 		} else {
-			$this->redirect_to_stored_links( array( 'sl_cleared' => '0' ) );
+			$this->redirect_to_cache_tab( array( 'sl_cleared' => '0' ) );
 		}
 	}
 
@@ -1734,6 +1874,28 @@ class V4V_Music_Link_Resolver_Pro {
 			'sanitize_callback' => 'rest_sanitize_boolean',
 			'default'           => true,
 		) );
+		register_setting( 'v4v_musiclink_pro', 'v4v_musiclink_pro_mi_refresh_hours', array(
+			'type'              => 'integer',
+			'sanitize_callback' => array( $this, 'sanitize_mi_refresh_hours' ),
+			'default'           => self::MI_REFRESH_DEFAULT_HOURS,
+		) );
+	}
+
+	/**
+	 * Admin "Music Index refresh" hours: absint, then 0/empty/non-numeric
+	 * fall back to the default (12), then clamp to 1..720 (1 hour ..
+	 * 30 days).
+	 *
+	 * @param mixed $value Raw option value from the settings form.
+	 * @return int Hours between background MI refreshes.
+	 */
+	public function sanitize_mi_refresh_hours( $value ) {
+		$hours = absint( $value );
+		if ( ! $hours ) {
+			$hours = self::MI_REFRESH_DEFAULT_HOURS;
+		}
+
+		return min( max( $hours, 1 ), 720 );
 	}
 
 	/**
@@ -1932,7 +2094,7 @@ class V4V_Music_Link_Resolver_Pro {
 			return;
 		}
 		$active_tab = isset( $_GET['tab'] ) ? sanitize_text_field( wp_unslash( $_GET['tab'] ) ) : 'settings';
-		if ( ! in_array( $active_tab, array( 'settings', 'log', 'reports', 'links' ), true ) ) {
+		if ( ! in_array( $active_tab, array( 'settings', 'log', 'reports', 'cache' ), true ) ) {
 			$active_tab = 'settings';
 		}
 		$mode = $this->get_social_preview_mode();
@@ -1960,8 +2122,8 @@ class V4V_Music_Link_Resolver_Pro {
 				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=reports' ) ); ?>" class="nav-tab <?php echo 'reports' === $active_tab ? 'nav-tab-active' : ''; ?>">
 					<?php esc_html_e( 'Reports', 'v4v-musiclink-pro' ); ?>
 				</a>
-				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=links' ) ); ?>" class="nav-tab <?php echo 'links' === $active_tab ? 'nav-tab-active' : ''; ?>">
-					<?php esc_html_e( 'Stored links', 'v4v-musiclink-pro' ); ?>
+				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink-pro&tab=cache' ) ); ?>" class="nav-tab <?php echo 'cache' === $active_tab ? 'nav-tab-active' : ''; ?>">
+					<?php esc_html_e( 'Cache', 'v4v-musiclink-pro' ); ?>
 				</a>
 			</h2>
 
@@ -1969,8 +2131,8 @@ class V4V_Music_Link_Resolver_Pro {
 				<?php $this->render_log_tab_content(); ?>
 			<?php elseif ( 'reports' === $active_tab ) : ?>
 				<?php $this->render_reports_tab_content(); ?>
-			<?php elseif ( 'links' === $active_tab ) : ?>
-				<?php $this->render_stored_links_tab_content(); ?>
+			<?php elseif ( 'cache' === $active_tab ) : ?>
+				<?php $this->render_cache_tab_content(); ?>
 			<?php else : ?>
 				<form method="post" action="options.php">
 				<?php settings_fields( 'v4v_musiclink_pro' ); ?>
@@ -2277,6 +2439,27 @@ class V4V_Music_Link_Resolver_Pro {
 							</p>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row">
+							<label for="v4v_musiclink_pro_mi_refresh_hours"><?php esc_html_e( 'Music Index refresh', 'v4v-musiclink-pro' ); ?></label>
+						</th>
+						<td>
+							<input
+								type="number"
+								id="v4v_musiclink_pro_mi_refresh_hours"
+								name="v4v_musiclink_pro_mi_refresh_hours"
+								value="<?php echo esc_attr( get_option( 'v4v_musiclink_pro_mi_refresh_hours', self::MI_REFRESH_DEFAULT_HOURS ) ); ?>"
+								min="1"
+								max="720"
+								step="1"
+								class="small-text"
+							/>
+							<?php esc_html_e( 'hours', 'v4v-musiclink-pro' ); ?>
+							<p class="description">
+								<?php esc_html_e( 'When a background refresh of cached Music Index metadata (titles, artist, artwork) is triggered. Cached data keeps serving at any age and is never cleared by this value - lower means fresher metadata, higher means fewer Music Index requests. Default: 12 hours. This does not affect failure throttles, stored Fountain.fm links, search results, log beacons, or social previews.', 'v4v-musiclink-pro' ); ?>
+							</p>
+						</td>
+					</tr>
 				</table>
 				<?php submit_button(); ?>
 			</form>
@@ -2290,7 +2473,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.26', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.27', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2827,6 +3010,12 @@ JS;
 	}
 
 	public function render( $atts ) {
+		// Page renders are the only context allowed to queue background
+		// Music Index refreshes (see the $mi_refresh_allowed gate). The
+		// search box, the log beacons and the og: preview all call
+		// resolve_release_meta() without this flag and can never queue one.
+		$this->mi_refresh_allowed = true;
+
 		$atts = shortcode_atts( array(
 			'album'  => '',
 			'track'  => '',
@@ -2918,17 +3107,17 @@ JS;
 		if ( $this->is_app_enabled( 'fountain' ) ) {
 			$fountain_url = 'https://fountain.fm/discover';
 
-			// Stored link first: an exact album/track match with a link on
+			// Cached link first: an exact album/track match with a link on
 			// file is used exactly as it stands - no search, no transient,
 			// no self-heal and no write-back - so a link that already
 			// works keeps working through a Fountain redeploy, and one
 			// corrected by hand is never reverted. '' means either "no
 			// entry yet" or "entry whose link was blanked to force a
 			// re-search"; both fall through to the search below.
-			$stored_url = $this->get_stored_link( $album, $track );
+			$cached_url = $this->get_cached_fountain_url( $album, $track );
 
-			if ( '' !== $stored_url ) {
-				$fountain_url = $stored_url;
+			if ( '' !== $cached_url ) {
+				$fountain_url = $cached_url;
 			} else {
 				// Keep the search text and the guid we're matching against in
 				// sync: if track-level data didn't resolve, fall back to the
@@ -2952,7 +3141,7 @@ JS;
 					// fountain.fm/discover fallback above must never be
 					// persisted, or it would pin a generic Fountain link
 					// to this release forever.
-					$this->store_stored_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
+					$this->store_fountain_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
 				}
 			}
 
@@ -3610,59 +3799,347 @@ JS;
 	}
 
 	/**
-	 * GET /v1/feeds/{feedGuid} - album/feed-level metadata: title and artist.
-	 * Cached via transient.
+	 * GET /v1/feeds/{feedGuid} - album/feed-level metadata: title and
+	 * artist, served from the cache row (stale-while-revalidate):
+	 *
+	 *  1. Row has MI data and mi_updated_at is within
+	 *     mi_refresh_interval()  -> serve, no HTTP.
+	 *  2. Row has MI data but is stale (or mi_updated_at IS NULL) ->
+	 *     serve it immediately, then queue a background pull - only when
+	 *     the render gate allows, no failure is being remembered and no
+	 *     attempt is already in flight (see queue_mi_refresh()).
+	 *  3. Row has no MI data at all -> the old blocking miss path:
+	 *     negative-transient check, fetch, record onto the row (or
+	 *     remember the failure per negative_cache_ttl()).
+	 *
+	 * Branch 3 is NOT gated: the search box, the log beacons and the og:
+	 * preview all need titles to do their job, and filling an absent row
+	 * costs the same API traffic the old transient fill did. Only branch
+	 * 2's queueing is render-only. Rows are never evicted: stale data
+	 * keeps serving at any age, so a Music Index outage cannot turn an
+	 * already-seen release into "Album/Song not found".
 	 */
 	private function mi_get_feed( $feed_guid ) {
-		$cache_key = 'mi_feed_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $feed_guid );
-		$cached    = get_transient( $cache_key );
-		if ( false !== $cached ) {
-			return ! empty( $cached ) ? $cached : null;
+		$row = $this->cache_get_row( $feed_guid, '' );
+
+		if ( ! $row || ! $this->row_has_mi( $row ) ) {
+			return $this->mi_fetch_and_record( 'feed', $feed_guid, '' );
+		}
+
+		if ( ! $this->row_mi_is_fresh( $row ) ) {
+			$this->queue_mi_refresh( 'feed', $feed_guid, '' );
+		}
+
+		return array(
+			'title'  => $row->album_title,
+			'artist' => $row->artist,
+			'image'  => $row->image_url,
+		);
+	}
+
+	/**
+	 * GET /v1/feeds/{feedGuid}/tracks/{trackGuid} - track-level metadata:
+	 * track title, its parent album title, and artist. Same three-branch
+	 * cache contract as mi_get_feed(); see the docblock there.
+	 */
+	private function mi_get_track( $feed_guid, $track_guid ) {
+		$row = $this->cache_get_row( $feed_guid, $track_guid );
+
+		if ( ! $row || ! $this->row_has_mi( $row ) ) {
+			return $this->mi_fetch_and_record( 'track', $feed_guid, $track_guid );
+		}
+
+		if ( ! $this->row_mi_is_fresh( $row ) ) {
+			$this->queue_mi_refresh( 'track', $feed_guid, $track_guid );
+		}
+
+		return array(
+			'title'       => $row->track_title,
+			'album_title' => $row->album_title,
+			'artist'      => $row->artist,
+			'image'       => $row->image_url,
+		);
+	}
+
+	/**
+	 * Branch 3: no cached MI data for this pair at all - fetch it now
+	 * (blocking, exactly like the old transient miss path) and record it
+	 * on the row. Deliberately not gated (see mi_get_feed()).
+	 *
+	 * Returns the parsed result array, or null when the lookup failed -
+	 * in which case the failure is remembered per negative_cache_ttl()
+	 * and the row is left untouched.
+	 */
+	private function mi_fetch_and_record( $kind, $album, $track ) {
+		$result = ( 'feed' === $kind )
+			? $this->mi_fetch_feed( $album )
+			: $this->mi_fetch_track( $album, $track );
+
+		if ( null === $result ) {
+			return null;
+		}
+
+		$this->mi_store_mi_fields( $kind, $album, $track, $result );
+
+		return $result;
+	}
+
+	/**
+	 * The fetch half of the feed lookup: negative-transient check, API
+	 * call, parse. Shared by branch 3 and the background pull so the two
+	 * can never drift. On a miss (definitive or not) the failure is
+	 * remembered under the key branch 3 checks, for however long
+	 * negative_cache_ttl() says it deserves.
+	 */
+	private function mi_fetch_feed( $feed_guid ) {
+		$negative_key = $this->mi_negative_key( 'feed', $feed_guid, '' );
+		if ( false !== get_transient( $negative_key ) ) {
+			return null;
 		}
 
 		$body = $this->mi_api_get( '/feeds/' . rawurlencode( $feed_guid ) );
 
 		if ( empty( $body['data']['title'] ) ) {
-			set_transient( $cache_key, array(), $this->negative_cache_ttl() );
+			set_transient( $negative_key, array(), $this->negative_cache_ttl() );
 			return null;
 		}
 
-		$result = array(
+		return array(
 			'title'  => $body['data']['title'],
 			'artist' => isset( $body['data']['release_artist'] ) ? $body['data']['release_artist'] : '',
 			'image'  => isset( $body['data']['image_url'] ) ? $body['data']['image_url'] : '',
 		);
-		set_transient( $cache_key, $result, self::CACHE_TTL );
-		return $result;
 	}
 
 	/**
-	 * GET /v1/feeds/{feedGuid}/tracks/{trackGuid} - track-level metadata:
-	 * track title, its parent album title, and artist. Cached via transient.
+	 * The fetch half of the track lookup - see mi_fetch_feed().
 	 */
-	private function mi_get_track( $feed_guid, $track_guid ) {
-		$cache_key = 'mi_track_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $feed_guid . '|' . $track_guid );
-		$cached    = get_transient( $cache_key );
-		if ( false !== $cached ) {
-			return ! empty( $cached ) ? $cached : null;
+	private function mi_fetch_track( $feed_guid, $track_guid ) {
+		$negative_key = $this->mi_negative_key( 'track', $feed_guid, $track_guid );
+		if ( false !== get_transient( $negative_key ) ) {
+			return null;
 		}
 
 		$body = $this->mi_api_get( '/feeds/' . rawurlencode( $feed_guid ) . '/tracks/' . rawurlencode( $track_guid ) );
 
 		if ( empty( $body['data']['title'] ) ) {
-			set_transient( $cache_key, array(), $this->negative_cache_ttl() );
+			set_transient( $negative_key, array(), $this->negative_cache_ttl() );
 			return null;
 		}
 
-		$data   = $body['data'];
-		$result = array(
+		$data = $body['data'];
+
+		return array(
 			'title'       => $data['title'],
 			'album_title' => isset( $data['feed_title'] ) ? $data['feed_title'] : '',
 			'artist'      => ! empty( $data['track_artist'] ) ? $data['track_artist'] : ( isset( $data['release_artist'] ) ? $data['release_artist'] : '' ),
 			'image'       => isset( $data['image_url'] ) ? $data['image_url'] : '',
 		);
-		set_transient( $cache_key, $result, self::CACHE_TTL );
-		return $result;
+	}
+
+	/**
+	 * Writes freshly fetched MI data onto the cache row: the MI columns
+	 * plus mi_updated_at, and NOTHING else - fountain_url and
+	 * fountain_updated_at are owned by the link path and are never
+	 * touched here (the ON DUPLICATE KEY UPDATE lists only MI columns).
+	 * A successful pull with no artwork still stamps mi_updated_at, so a
+	 * legitimately empty image_url never re-pulls.
+	 */
+	private function mi_store_mi_fields( $kind, $album, $track, $result ) {
+		global $wpdb;
+		$table = $this->cache_table();
+		$hash  = $this->cache_row_hash( $album, $track );
+
+		if ( 'feed' === $kind ) {
+			$album_title = $result['title'];
+			$track_title = '';
+		} else {
+			$album_title = isset( $result['album_title'] ) ? $result['album_title'] : '';
+			$track_title = $result['title'];
+		}
+
+		$wpdb->query(
+			$wpdb->prepare(
+				"INSERT INTO {$table}
+					(lookup_hash, album_guid, track_guid, album_title, track_title, artist, image_url, fountain_url, fountain_updated_at, mi_updated_at)
+				VALUES (%s, %s, %s, %s, %s, %s, %s, '', %s, %s)
+				ON DUPLICATE KEY UPDATE
+					album_title = VALUES(album_title),
+					track_title = VALUES(track_title),
+					artist = VALUES(artist),
+					image_url = VALUES(image_url),
+					mi_updated_at = VALUES(mi_updated_at)",
+				$hash,
+				$album,
+				$track,
+				$album_title,
+				$track_title,
+				isset( $result['artist'] ) ? $result['artist'] : '',
+				isset( $result['image'] ) ? $result['image'] : '',
+				current_time( 'mysql' ),
+				current_time( 'mysql' )
+			)
+		);
+
+		unset( $this->row_memo[ $hash ] );
+	}
+
+	/**
+	 * The transient key a failed MI lookup is remembered under - the key
+	 * branch 3 and the background pull both check first. Unchanged
+	 * formula from the old positive/negative shared key (the `_pro_`
+	 * keeps this plugin's misses in their own keyspace): the positives
+	 * have moved to the cache table, so this key now only ever holds
+	 * remembered misses.
+	 */
+	private function mi_negative_key( $kind, $album, $track ) {
+		return 'feed' === $kind
+			? 'mi_feed_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album )
+			: 'mi_track_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album . '|' . $track );
+	}
+
+	/**
+	 * Whether a cache row carries Music Index data worth serving. A
+	 * migrated row counts (its copied titles are real data even though
+	 * mi_updated_at is still NULL - which is exactly why a NULL stamp is
+	 * always refresh-eligible).
+	 */
+	private function row_has_mi( $row ) {
+		return ( null !== $row->mi_updated_at && '' !== $row->mi_updated_at )
+			|| '' !== $row->album_title
+			|| '' !== $row->track_title
+			|| '' !== $row->artist
+			|| '' !== $row->image_url;
+	}
+
+	/**
+	 * Whether the row's MI half is within the admin-set refresh interval
+	 * (mi_refresh_interval()). NULL/empty/unparsable mi_updated_at is
+	 * always stale. Both sides of the comparison are site-local
+	 * 'Y-m-d H:i:s' strings: mi_updated_at is stamped with
+	 * current_time('mysql'), and the cutoff is "now - interval" in GMT
+	 * converted the same way, so no timezone conversion can skew the
+	 * window.
+	 */
+	private function row_mi_is_fresh( $row ) {
+		if ( empty( $row->mi_updated_at ) ) {
+			return false;
+		}
+
+		$cutoff = get_date_from_gmt( gmdate( 'Y-m-d H:i:s', time() - $this->mi_refresh_interval() ) );
+
+		return (string) $row->mi_updated_at >= $cutoff;
+	}
+
+	/**
+	 * The admin-configured MI refresh interval in seconds: option
+	 * (hours), 0/missing/unset falling back to the 12-hour default,
+	 * clamped to 1..720 (1 hour .. 30 days). Refresh-only: it decides
+	 * when a background pull is queued, never when a row is dropped.
+	 */
+	private function mi_refresh_interval() {
+		$hours = (int) get_option( 'v4v_musiclink_pro_mi_refresh_hours', self::MI_REFRESH_DEFAULT_HOURS );
+
+		return min( max( $hours, 1 ), 720 ) * HOUR_IN_SECONDS;
+	}
+
+	/**
+	 * Queue a background Music Index pull for a stale row (branch 2 of
+	 * mi_get_feed()/mi_get_track()). Default-deny: the $mi_refresh_allowed
+	 * gate means only render() can ever get here - the search box, the
+	 * log beacons and the og: preview cannot trigger a refresh. The
+	 * per-row attempt marker keeps concurrent renders of the same stale
+	 * row from stacking pulls, and expires after a minute so a hard-killed
+	 * attempt self-heals on the next allowed render.
+	 */
+	private function queue_mi_refresh( $kind, $album, $track ) {
+		if ( ! $this->mi_refresh_allowed ) {
+			return;
+		}
+
+		$hash   = $this->cache_row_hash( $album, $track );
+		$marker = 'v4v_musiclink_pro_mi_attempt_' . md5( $hash );
+
+		// A remembered failure, or an attempt already in flight: this row
+		// is spoken for - do nothing. (The failure transient holds an
+		// empty array, so the check is "is set", never "is truthy".)
+		if ( false !== get_transient( $this->mi_negative_key( $kind, $album, $track ) ) ) {
+			return;
+		}
+		if ( get_transient( $marker ) ) {
+			return;
+		}
+
+		$this->mi_refresh_pending[ $hash ] = array(
+			'kind'  => $kind,
+			'album' => $album,
+			'track' => $track,
+		);
+
+		set_transient( $marker, 1, MINUTE_IN_SECONDS );
+	}
+
+	/**
+	 * Runs the queued background pulls on the shutdown hook (priority 10,
+	 * so WordPress's own wp_ob_end_flush_all at priority 1 has already
+	 * sent the page). No cron, no queue option, no server config:
+	 * ignore_user_abort() plus fastcgi_finish_request() when available
+	 * close the response first, then one short Music Index GET completes
+	 * per stale row. If PHP dies mid-pull the row simply stays stale,
+	 * keeps serving, and the next allowed render retries (the attempt
+	 * marker expires after a minute).
+	 */
+	public function run_queued_mi_refresh() {
+		if ( empty( $this->mi_refresh_pending ) ) {
+			return;
+		}
+
+		ignore_user_abort( true );
+		if ( function_exists( 'fastcgi_finish_request' ) ) {
+			fastcgi_finish_request();
+		}
+
+		$pending                  = $this->mi_refresh_pending;
+		$this->mi_refresh_pending = array();
+
+		foreach ( $pending as $item ) {
+			$kind  = $item['kind'];
+			$album = $item['album'];
+			$track = $item['track'];
+			$hash  = $this->cache_row_hash( $album, $track );
+
+			// A failure remembered since the queue was taken: skip; the
+			// row's next view re-queues once that transient expires.
+			if ( false !== get_transient( $this->mi_negative_key( $kind, $album, $track ) ) ) {
+				continue;
+			}
+
+			// Re-read the row straight from the database (the memo may
+			// predate this request's end): gone, or already refreshed by
+			// a concurrent request, means there is nothing to do.
+			global $wpdb;
+			$row = $wpdb->get_row(
+				$wpdb->prepare(
+					'SELECT * FROM ' . $this->cache_table() . ' WHERE lookup_hash = %s LIMIT 1',
+					$hash
+				)
+			);
+			if ( ! $row || $this->row_mi_is_fresh( $row ) ) {
+				continue;
+			}
+			unset( $this->row_memo[ $hash ] );
+
+			// The shared fetch half; a failure sets the negative
+			// transient (via negative_cache_ttl()) and leaves the row
+			// stale - the same contract branch 3 has.
+			$result = ( 'feed' === $kind )
+				? $this->mi_fetch_feed( $album )
+				: $this->mi_fetch_track( $album, $track );
+
+			if ( null !== $result ) {
+				$this->mi_store_mi_fields( $kind, $album, $track, $result );
+			}
+		}
 	}
 
 	/**
