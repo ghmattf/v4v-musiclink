@@ -64,13 +64,17 @@ Applies to code releases only (never for docs-only changes):
    can flake — re-run a flaky one once before concluding). Until
    `OUTSTANDING.md` item O4 lands, they live in gitignored `tmp/`.
 3. `./bump-version.sh standard|pro|both` — bumps the plugin header and the script
-   cache-buster (and refreshes backup copies under `archive/`, which stay uncommitted).
+   cache-buster, refreshes the backup copies under `archive/` (gitignored, never
+   committed), and **commits the bumped plugin file(s) itself** — only those
+   paths, with subject `Bump Resolver x.y.z` / `Bump Pro x.y.z` /
+   `Bump Resolver a.b.c / Pro d.e.f`.
 4. Add `CHANGELOG.md` entries at the top, Keep-a-Changelog style, dated today:
    `## Resolver (v4v-musiclink) — [x.y.z] - YYYY-MM-DD` /
    `## Resolver Pro (v4v-musiclink-pro) — [x.y.z] - YYYY-MM-DD`.
-5. Commit only the two plugin files + `CHANGELOG.md` (plus `OUTSTANDING.md` if
-   statuses changed): subject `Resolver x.y.z: …` / `Pro x.y.z: …`, or a combined
-   `Resolver a.b.c / Pro d.e.f: …`. `tmp/` and `archive/` stay uncommitted.
+5. Commit `CHANGELOG.md` (plus `OUTSTANDING.md` if statuses changed): subject
+   `Resolver x.y.z: …` / `Pro x.y.z: …`, or a combined
+   `Resolver a.b.c / Pro d.e.f: …`. Step 3 already committed the plugin files;
+   `tmp/` and `archive/` stay uncommitted. Never `git add -A` here.
 6. Annotated, `v`-prefixed tags: `git tag -a vx.y.z -m "Resolver x.y.z"` (or
    `"Pro x.y.z"`). Nothing is pushed (no remote configured).
 7. Update `OUTSTANDING.md` statuses in the same turn; remove any item just shipped.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # bump-version.sh - bump the patch version of the V4V MusicLink plugins,
-# update both version strings in the PHP file, and refresh the archive copy.
+# update both version strings in the PHP file, refresh the archive copy,
+# and commit the plugin file(s) that changed.
 #
 # Usage:
 #   ./bump-version.sh            # bump both plugins
@@ -10,6 +11,10 @@
 #
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# Versions recorded for the commit message (empty = plugin not bumped).
+new_standard=""
+new_pro=""
 
 bump_file() {
 	local file="$1" stem="$2"
@@ -42,6 +47,12 @@ bump_file() {
 	mkdir -p "$(dirname "$file")/archive"
 	cp "$file" "$(dirname "$file")/archive/${stem}-v${new}.php"
 	echo "Bumped $file: $cur -> $new (archive/${stem}-v${new}.php)"
+
+	# Remember what was bumped for the commit below.
+	case "$stem" in
+		v4v-musiclink) new_standard="$new" ;;
+		v4v-musiclink-pro) new_pro="$new" ;;
+	esac
 }
 
 target="${1:-both}"
@@ -63,4 +74,29 @@ case "$target" in
 		;;
 esac
 
-echo "Done. Remember to update CHANGELOG.md, commit, and tag."
+# --- Commit just the plugin file(s) that were bumped -----------------------
+# Only these paths are committed: anything else sitting in the index (or an
+# unrelated edit on disk) is left alone, and the archive copies this script
+# just wrote are gitignored, so they never ride along.
+
+msg=""
+paths=()
+
+if [ -n "$new_standard" ]; then
+	msg="Resolver ${new_standard}"
+	paths+=("v4v-musiclink/v4v-musiclink.php")
+fi
+if [ -n "$new_pro" ]; then
+	msg="${msg:+${msg} / }Pro ${new_pro}"
+	paths+=("v4v-musiclink-pro/v4v-musiclink-pro.php")
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	echo "Not a git work tree - 'Bump ${msg}' left uncommitted." >&2
+elif git diff --quiet HEAD -- "${paths[@]}"; then
+	echo "Nothing to commit for: ${msg}"
+else
+	git commit -m "Bump ${msg}" -- "${paths[@]}"
+fi
+
+echo "Done. Now add CHANGELOG.md entries (+ OUTSTANDING.md statuses), commit those, and tag."

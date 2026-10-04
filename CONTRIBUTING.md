@@ -34,12 +34,12 @@ This project is tracked with git. All changes must be committed; releases are ma
 ### Automated: `./bump-version.sh`
 
 ```bash
-./bump-version.sh          # bump both plugins, update versions, refresh archive copies
+./bump-version.sh          # bump both plugins, update versions, refresh backup copies, commit them
 ./bump-version.sh standard # bump the standard plugin only
 ./bump-version.sh pro      # bump the Pro plugin only
 ```
 
-The script increments the patch version in both places, then refreshes the archive copy (below).
+The script increments the patch version in both places, refreshes the archive copy (below), then commits **only the plugin file(s) it just changed** with a `Bump Resolver x.y.z` / `Bump Pro x.y.z` subject — anything else you have staged or edited is left alone, and the archive copies are gitignored so they never ride along. If the directory is not a git work tree it skips the commit and says so.
 
 ## Archive copies
 
@@ -66,10 +66,14 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
    ./php/install.sh   # only if ./php/php is missing
    ./php/php -l v4v-musiclink/v4v-musiclink.php && ./php/php -l v4v-musiclink-pro/v4v-musiclink-pro.php
    ```
-3. Bump version(s): `./bump-version.sh` (or `standard` / `pro`).
+3. Bump version(s): `./bump-version.sh` (or `standard` / `pro`) — this commits the
+   bumped plugin file(s) itself, subject `Bump Resolver x.y.z` / `Bump Pro x.y.z`.
 4. Add a `CHANGELOG.md` entry for the new version(s).
-5. Commit: `git add -A && git commit -m "Release vX.Y.Z"`
-6. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` and `git push --tags`.
+5. Commit the docs: `git add CHANGELOG.md && git commit -m "Resolver x.y.z: …"` —
+   plus `OUTSTANDING.md` if any statuses changed. Never `git add -A` (it would
+   sweep in unrelated edits and local scratch).
+6. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` — local only,
+   no remote is configured.
 
 ## Naming conventions (why they matter)
 
