@@ -3,6 +3,24 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.22] - 2026-10-04
+
+### Added
+- **Artwork is editable per row in the Cache tab**: the Art cell is no longer a thumbnail but a green tick when an `image_url` is stored (a red cross when it is not), and clicking it opens one shared dialog — preview image, editable **Artwork URL** field, **Update**/**Cancel** — whose form posts to the existing `admin_post_v4v_musiclink_update_cache_row` handler with `link_field=art`. `handle_update_cache_row()` now whitelists that field against a new `CACHE_EDIT_COLUMNS` const (`fountain` → `fountain_url`, `art` → `image_url`) instead of `LINK_COLUMNS`, which stays Fountain-only because it also drives the Clear scope dropdown and `app_display_label()`; validation follows the field, so a link must still be an https URL on its own app's domain while artwork only has to be http(s), or blank to drop the art (a bad value is rejected rather than stored). An art edit stamps `mi_updated_at` — it is a metadata write, and it defers the next background pull by the refresh interval — and leaves `fountain_updated_at` alone; a link edit stamps only `fountain_updated_at`, exactly as before. Two new notices announce the outcome: "Artwork URL updated." (`sl_art_saved`) and "That artwork URL was not saved: it must be an http(s) URL, or blank to remove the artwork." (`sl_art_error`); the tab description now says artwork and links are edited here per row while titles and artist keep refreshing in the background.
+
+### Changed
+- **The Cache tab's columns and cells**: the timestamp column is renamed **"MI updated" → "Metadata Updated" and moved to the front**, so the order is Metadata Updated, Artist, Album title, Track title, Album GUID, Track GUID, Art, Fountain.fm link, Fountain updated, Actions (still ten columns, so the colspan is unchanged). Both timestamp columns print the date only — the seconds of a MySQL `datetime` say nothing an admin needs to act on. The Fountain.fm link cell no longer prints the URL (nor "empty - will re-search"): it shows **[Edit]** — moved out of the Actions column — plus **[Launch]**, which opens the stored link in a new tab, or the red cross when there is no link yet, while the Actions column keeps only **[Remove]**. The inline Fountain editor's help text and the Clear-cache handler's docblock drop the now-stale "Music Index fields are read-only" / "empty - will re-search" wording.
+- **Docs: the README's Cache tab bullet describes the tick/cross art status, the date-only timestamps and the artwork/link editing it now supports.**
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.28] - 2026-10-04
+
+### Added
+- **Identical to Resolver 1.22.22 — artwork is editable per row in the Cache tab**: the Art cell is a green tick (an `image_url` is stored) or a red cross (none), and opens one shared dialog (preview image, editable Artwork URL, Update/Cancel) posting to `admin_post_v4v_musiclink_pro_update_cache_row` with `link_field=art`; `handle_update_cache_row()` whitelists it against the new `CACHE_EDIT_COLUMNS` (`fountain` → `fountain_url`, `art` → `image_url`), so links keep their https-on-own-domain rule while artwork accepts any http(s) URL or blank to drop it. Art edits stamp `mi_updated_at` and leave `fountain_updated_at` alone, link edits stamp only `fountain_updated_at` as before, and the new `sl_art_saved` / `sl_art_error` notices report the outcome ("Artwork URL updated." / "That artwork URL was not saved: it must be an http(s) URL, or blank to remove the artwork.").
+
+### Changed
+- **Identical to Resolver 1.22.22 — the Cache tab's columns and cells**: "MI updated" is renamed **"Metadata Updated" and moved to the first column** (then Artist, Album title, Track title, Album GUID, Track GUID, Art, Fountain.fm link, Fountain updated, Actions — still ten columns); both timestamp columns print the date only; the Fountain.fm link cell no longer prints the URL but shows **[Edit]** plus **[Launch]** (new tab) when a link is stored, or the red cross when not, with **[Remove]** alone left in the Actions column; the inline editor's help text and the Clear-cache docblock lose the stale read-only / "empty - will re-search" wording.
+- **Docs: the README's Cache tab bullet describes the tick/cross art status, the date-only timestamps and the artwork/link editing it now supports.**
+
 ## Resolver (v4v-musiclink) — [1.22.21] - 2026-10-04
 
 ### Added
