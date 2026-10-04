@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.27
+ * Version: 1.20.28
  * Author: Matt Finlay
  *
  * USAGE:
@@ -196,6 +196,19 @@ class V4V_Music_Link_Resolver_Pro {
 	 * the tab - not another row.
 	 */
 	const LINK_COLUMNS = array( 'fountain' => 'fountain_url' );
+
+	/**
+	 * The columns the Cache tab's edit controls may write, keyed by the
+	 * edit form's link_field value. LINK_COLUMNS stays fountain-only -
+	 * it also drives the Clear scope dropdown and app_display_label() -
+	 * while the artwork control joins here so it can rewrite or blank
+	 * image_url. Validation differs per field: a link must be an https
+	 * URL on its own app's domain, artwork only has to be http(s).
+	 */
+	const CACHE_EDIT_COLUMNS = array(
+		'fountain' => 'fountain_url',
+		'art'      => 'image_url',
+	);
 
 	// Search pagination. Music Index caps `limit` at 100 and pages the rest
 	// behind opaque cursors, so a batch is at most SEARCH_BATCH_LIMIT rows and
@@ -1579,6 +1592,10 @@ class V4V_Music_Link_Resolver_Pro {
 			<div class="notice notice-success is-dismissible">
 				<p><?php esc_html_e( 'Fountain.fm link updated.', 'v4v-musiclink-pro' ); ?></p>
 			</div>
+		<?php elseif ( isset( $_GET['sl_art_saved'] ) ) : ?>
+			<div class="notice notice-success is-dismissible">
+				<p><?php esc_html_e( 'Artwork URL updated.', 'v4v-musiclink-pro' ); ?></p>
+			</div>
 		<?php elseif ( isset( $_GET['sl_deleted'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
 				<p><?php esc_html_e( 'Cache row removed. It will be created again if the release is viewed again.', 'v4v-musiclink-pro' ); ?></p>
@@ -1587,10 +1604,14 @@ class V4V_Music_Link_Resolver_Pro {
 			<div class="notice notice-error is-dismissible">
 				<p><?php esc_html_e( 'That link was not saved: it must be an https URL on this app\'s own domain.', 'v4v-musiclink-pro' ); ?></p>
 			</div>
+		<?php elseif ( isset( $_GET['sl_art_error'] ) ) : ?>
+			<div class="notice notice-error is-dismissible">
+				<p><?php esc_html_e( 'That artwork URL was not saved: it must be an http(s) URL, or blank to remove the artwork.', 'v4v-musiclink-pro' ); ?></p>
+			</div>
 		<?php endif; ?>
 
 		<p class="description">
-			<?php esc_html_e( 'One row per release: cached Music Index metadata (titles, artist, artwork) plus the resolved Fountain.fm link. Metadata refreshes in the background on the interval set under Settings ("Music Index refresh") while stale rows keep serving; links are permanent until cleared or edited here.', 'v4v-musiclink-pro' ); ?>
+			<?php esc_html_e( 'One row per release: cached Music Index metadata (titles, artist, artwork) plus the resolved Fountain.fm link. Artwork and the Fountain.fm link are edited here per row; titles and artist refresh in the background on the interval set under Settings ("Music Index refresh") while stale rows keep serving.', 'v4v-musiclink-pro' ); ?>
 		</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:1em 0;">
@@ -1637,6 +1658,7 @@ class V4V_Music_Link_Resolver_Pro {
 		<table class="widefat striped">
 			<thead>
 				<tr>
+					<th><?php esc_html_e( 'Metadata Updated', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Artist', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Album title', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Track title', 'v4v-musiclink-pro' ); ?></th>
@@ -1644,7 +1666,6 @@ class V4V_Music_Link_Resolver_Pro {
 					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Art', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></th>
-					<th><?php esc_html_e( 'MI updated', 'v4v-musiclink-pro' ); ?></th>
 					<th><?php esc_html_e( 'Fountain updated', 'v4v-musiclink-pro' ); ?></th>
 					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclink-pro' ); ?></span></th>
 				</tr>
@@ -1654,30 +1675,43 @@ class V4V_Music_Link_Resolver_Pro {
 					<tr><td colspan="10"><?php esc_html_e( 'No cached rows match.', 'v4v-musiclink-pro' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
+						<?php $art_label = trim( $row->artist . ' - ' . ( $row->album_title ? $row->album_title : (string) $row->track_title ) ); ?>
+						<?php // Timestamps are stored as MySQL datetimes; only the date part is useful here. ?>
 						<tr>
+							<td><?php echo esc_html( $row->mi_updated_at ? substr( $row->mi_updated_at, 0, 10 ) : '—' ); ?></td>
 							<td><?php echo esc_html( $row->artist ); ?></td>
 							<td><?php echo esc_html( $row->album_title ); ?></td>
 							<td><?php echo esc_html( $row->track_title ? $row->track_title : '—' ); ?></td>
 							<td class="code"><?php echo esc_html( $row->album_guid ); ?></td>
 							<td class="code"><?php echo esc_html( $row->track_guid ? $row->track_guid : '—' ); ?></td>
 							<td>
-								<?php if ( $row->image_url ) : ?>
-									<a href="<?php echo esc_url( $row->image_url ); ?>" target="_blank" rel="noopener noreferrer">
-										<img src="<?php echo esc_url( $row->image_url ); ?>" alt="" width="40" height="40" loading="lazy" style="display:block; width:40px; height:40px; object-fit:cover; border-radius:4px;" />
-									</a>
-								<?php endif; ?>
+								<?php // Tick or cross says whether an artwork URL is stored;
+								// clicking opens the modal below to rewrite or blank it. ?>
+								<button type="button" class="button button-small v4v-sl-art-toggle"
+									data-id="<?php echo (int) $row->id; ?>"
+									data-url="<?php echo esc_attr( (string) $row->image_url ); ?>"
+									data-label="<?php echo esc_attr( $art_label ); ?>"
+									title="<?php echo esc_attr( $row->image_url ? __( 'Edit artwork URL', 'v4v-musiclink-pro' ) : __( 'Add an artwork URL', 'v4v-musiclink-pro' ) ); ?>">
+									<?php if ( $row->image_url ) : ?>
+										<span style="color:#00a32a; font-size:16px; line-height:1;" aria-hidden="true">&#10003;</span>
+										<span class="screen-reader-text"><?php esc_html_e( 'Artwork URL stored - edit it', 'v4v-musiclink-pro' ); ?></span>
+									<?php else : ?>
+										<span style="color:#d63638; font-size:16px; line-height:1;" aria-hidden="true">&#10007;</span>
+										<span class="screen-reader-text"><?php esc_html_e( 'No artwork URL stored - add one', 'v4v-musiclink-pro' ); ?></span>
+									<?php endif; ?>
+								</button>
 							</td>
-							<td>
-								<?php if ( $row->fountain_url ) : ?>
-									<a href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $row->fountain_url ); ?></a>
-								<?php else : ?>
-									<em><?php esc_html_e( 'empty - will re-search', 'v4v-musiclink-pro' ); ?></em>
-								<?php endif; ?>
-							</td>
-							<td><?php echo esc_html( $row->mi_updated_at ? $row->mi_updated_at : '—' ); ?></td>
-							<td><?php echo esc_html( $row->fountain_updated_at ); ?></td>
 							<td style="white-space:nowrap;">
 								<button type="button" class="button button-small v4v-sl-edit-toggle" data-id="<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Edit', 'v4v-musiclink-pro' ); ?></button>
+								<?php if ( $row->fountain_url ) : ?>
+									<a class="button button-small" href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Launch', 'v4v-musiclink-pro' ); ?></a>
+								<?php else : ?>
+									<span style="color:#d63638; font-size:16px; line-height:1;" aria-hidden="true">&#10007;</span>
+									<span class="screen-reader-text"><?php esc_html_e( 'No Fountain.fm link stored', 'v4v-musiclink-pro' ); ?></span>
+								<?php endif; ?>
+							</td>
+							<td><?php echo esc_html( substr( (string) $row->fountain_updated_at, 0, 10 ) ); ?></td>
+							<td style="white-space:nowrap;">
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
 									<input type="hidden" name="action" value="v4v_musiclink_pro_delete_cache_row" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
@@ -1691,13 +1725,13 @@ class V4V_Music_Link_Resolver_Pro {
 								<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0.5em 0;">
 									<input type="hidden" name="action" value="v4v_musiclink_pro_update_cache_row" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
-									<?php // Which link column is being edited; whitelisted against LINK_COLUMNS. ?>
+									<?php // Which column is being edited; whitelisted against CACHE_EDIT_COLUMNS. ?>
 									<input type="hidden" name="link_field" value="fountain" />
 									<?php wp_nonce_field( 'v4v_musiclink_pro_update_cache_row' ); ?>
 									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink-pro' ); ?></label>
 									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->fountain_url ); ?>" style="flex:1 1 320px;" />
 									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclink-pro' ); ?></button>
-									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again. Music Index fields are read-only - the next refresh overwrites them.', 'v4v-musiclink-pro' ); ?></span>
+									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again. Titles and artist are read-only - the next refresh overwrites them.', 'v4v-musiclink-pro' ); ?></span>
 								</form>
 							</td>
 						</tr>
@@ -1705,6 +1739,32 @@ class V4V_Music_Link_Resolver_Pro {
 				<?php endif; ?>
 			</tbody>
 		</table>
+		<?php
+		// Artwork editor: one shared dialog, filled from the row's art
+		// control. The wrapper is display:none inline rather than hidden,
+		// so the flex layout below is never fighting the [hidden] rule.
+		?>
+		<div id="v4v-sl-art-modal" style="position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center;">
+			<div style="background:#fff; padding:1em 1.25em 1.25em; max-width:560px; width:92%; box-shadow:0 3px 14px rgba(0,0,0,.3); border-radius:4px;">
+				<h2 style="margin-top:0;" id="v4v-sl-art-title"></h2>
+				<p id="v4v-sl-art-preview" style="margin:.5em 0 1em;">
+					<img id="v4v-sl-art-img" alt="" style="max-width:100%; max-height:320px; display:block;" />
+				</p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<input type="hidden" name="action" value="v4v_musiclink_pro_update_cache_row" />
+					<input type="hidden" name="link_id" id="v4v-sl-art-id" value="" />
+					<input type="hidden" name="link_field" value="art" />
+					<?php wp_nonce_field( 'v4v_musiclink_pro_update_cache_row' ); ?>
+					<label for="v4v-sl-art-url"><?php esc_html_e( 'Artwork URL', 'v4v-musiclink-pro' ); ?></label>
+					<input type="url" class="regular-text code" id="v4v-sl-art-url" name="url" value="" style="width:100%; box-sizing:border-box;" />
+					<p class="description"><?php esc_html_e( 'Leave blank to remove the artwork. The next Music Index refresh fills it in again unless the row is still within its refresh interval.', 'v4v-musiclink-pro' ); ?></p>
+					<p style="margin-bottom:0; display:flex; gap:8px;">
+						<button type="submit" class="button button-primary"><?php esc_html_e( 'Update', 'v4v-musiclink-pro' ); ?></button>
+						<button type="button" class="button v4v-sl-art-close"><?php esc_html_e( 'Cancel', 'v4v-musiclink-pro' ); ?></button>
+					</p>
+				</form>
+			</div>
+		</div>
 		<script>
 		document.querySelectorAll( '.v4v-sl-edit-toggle' ).forEach( function ( button ) {
 			button.addEventListener( 'click', function () {
@@ -1712,17 +1772,45 @@ class V4V_Music_Link_Resolver_Pro {
 				if ( row ) { row.hidden = ! row.hidden; }
 			} );
 		} );
+		( function () {
+			var modal = document.getElementById( 'v4v-sl-art-modal' );
+			if ( ! modal ) { return; }
+			var close = function () { modal.style.display = 'none'; };
+			document.querySelectorAll( '.v4v-sl-art-toggle' ).forEach( function ( button ) {
+				button.addEventListener( 'click', function () {
+					var url   = button.getAttribute( 'data-url' ) || '';
+					var image = document.getElementById( 'v4v-sl-art-img' );
+					document.getElementById( 'v4v-sl-art-id' ).value    = button.getAttribute( 'data-id' ) || '';
+					document.getElementById( 'v4v-sl-art-title' ).textContent = button.getAttribute( 'data-label' ) || '';
+					document.getElementById( 'v4v-sl-art-url' ).value   = url;
+					document.getElementById( 'v4v-sl-art-preview' ).style.display = url ? '' : 'none';
+					image.src = url;
+					modal.style.display = 'flex';
+					document.getElementById( 'v4v-sl-art-url' ).focus();
+				} );
+			} );
+			modal.querySelectorAll( '.v4v-sl-art-close' ).forEach( function ( button ) {
+				button.addEventListener( 'click', close );
+			} );
+			modal.addEventListener( 'click', function ( event ) {
+				if ( event.target === modal ) { close(); }
+			} );
+			document.addEventListener( 'keydown', function ( event ) {
+				if ( 'Escape' === event.key && 'flex' === modal.style.display ) { close(); }
+			} );
+		}() );
 		</script>
 		<?php
 	}
 
 	/**
-	 * admin-post.php handler behind each row's Save button: rewrites that
-	 * row's Fountain link (or blanks it, forcing a re-search) after nonce
-	 * and capability checks, and only accepts an https URL on the app's
-	 * own domain. A blank link is a valid, deliberate value. The Music
-	 * Index half of the row is untouched (and read-only in the UI) - the
-	 * next background refresh overwrites it anyway.
+	 * admin-post.php handler behind both Cache-tab edit controls: the
+	 * Fountain link (or a blank, forcing a re-search) must be an https
+	 * URL on the app's own domain; the artwork URL only has to be
+	 * http(s), or blank to drop the art. Each edit stamps its own half's
+	 * timestamp - fountain_updated_at for the link, mi_updated_at for
+	 * artwork, which also defers the next background pull - and leaves
+	 * the other half alone.
 	 */
 	public function handle_update_cache_row() {
 		check_admin_referer( 'v4v_musiclink_pro_update_cache_row' );
@@ -1736,23 +1824,33 @@ class V4V_Music_Link_Resolver_Pro {
 		$id    = isset( $_POST['link_id'] ) ? (int) $_POST['link_id'] : 0;
 		$url   = isset( $_POST['url'] ) ? esc_url_raw( trim( wp_unslash( $_POST['url'] ) ) ) : '';
 
-		// Which link column the form was editing: whitelisted against
-		// LINK_COLUMNS, so a field name can never reach SQL, and the app
-		// slug it belongs to, for the domain check below.
+		// Which column the form was editing: whitelisted against
+		// CACHE_EDIT_COLUMNS, so a field name can never reach SQL. The
+		// app slug (fountain) is what the domain check below keys off;
+		// artwork is not domain-bound and gets the looser check instead.
 		$field  = isset( $_POST['link_field'] ) ? sanitize_key( wp_unslash( $_POST['link_field'] ) ) : '';
-		$column = isset( self::LINK_COLUMNS[ $field ] ) ? self::LINK_COLUMNS[ $field ] : '';
+		$column = isset( self::CACHE_EDIT_COLUMNS[ $field ] ) ? self::CACHE_EDIT_COLUMNS[ $field ] : '';
+		$is_art = 'art' === $field;
 
 		$exists = ( $id && '' !== $column )
 			? $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE id = %d", $id ) )
 			: null;
 
-		$valid = $id && null !== $exists && '' !== $column && ( '' === $url || $this->is_valid_stored_url( $url, $field ) );
+		$ok_url = $is_art
+			? ( '' === $url || 0 === strpos( $url, 'http://' ) || 0 === strpos( $url, 'https://' ) )
+			: ( '' === $url || $this->is_valid_stored_url( $url, $field ) );
+
+		// The edit's own timestamp: the link half for a link edit, the
+		// metadata half for artwork (which also defers the next pull).
+		$stamp = $is_art ? 'mi_updated_at' : 'fountain_updated_at';
+
+		$valid = $id && null !== $exists && '' !== $column && $ok_url;
 		if ( $valid ) {
 			$wpdb->update(
 				$table,
 				array(
-					$column               => $url,
-					'fountain_updated_at' => current_time( 'mysql' ),
+					$column => $url,
+					$stamp  => current_time( 'mysql' ),
 				),
 				array( 'id' => $id ),
 				array( '%s', '%s' ),
@@ -1760,7 +1858,11 @@ class V4V_Music_Link_Resolver_Pro {
 			);
 		}
 
-		$this->redirect_to_cache_tab( $valid ? array( 'sl_saved' => '1' ) : array( 'sl_error' => '1' ) );
+		$result = $valid
+			? ( $is_art ? 'sl_art_saved' : 'sl_saved' )
+			: ( $is_art ? 'sl_art_error' : 'sl_error' );
+
+		$this->redirect_to_cache_tab( array( $result => '1' ) );
 	}
 
 	/**
@@ -1788,8 +1890,8 @@ class V4V_Music_Link_Resolver_Pro {
 	 * admin-post.php handler behind the Clear control: empties the whole
 	 * table, or - for a single app - blanks only the link column and
 	 * leaves every other field of those rows in place (a cleared row
-	 * stays listed as "empty - will re-search" and simply re-resolves on
-	 * its next view). Returns to the tab with a count either way. The
+	 * shows the empty-link cross until it re-resolves on its next
+	 * view). Returns to the tab with a count either way. The
 	 * DELETE for Clear all rather than TRUNCATE: it needs only the DELETE
 	 * privilege, so it also works on restricted WordPress database users
 	 * (same reasoning as the view log's clear handler above).
@@ -2473,7 +2575,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.27', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.28', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
