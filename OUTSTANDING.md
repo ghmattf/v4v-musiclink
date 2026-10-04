@@ -58,8 +58,8 @@ flake/timeout; treat as informational and re-run once before concluding),
 `fountain_candidate_test.php` / `fountain_case_test.php` (no assertion
 counter) and the browser e2e in `tmp/e2e/` (`gen_page.php`, `router.php` -
 captured HTML files in that dir are scratch). Baseline as of 2026-10-04
-(Resolver 1.22.22 / Pro 1.20.28): 14 files - the 11 offline harnesses are
-green (896 counted assertions) and `tmp/e2e/gen_page.php` self-checks pass;
+(Resolver 1.22.23 / Pro 1.20.29): 14 files - the 11 offline harnesses are
+green (910 counted assertions) and `tmp/e2e/gen_page.php` self-checks pass;
 `fountain_live_test` is 0/20 until O11 is fixed, and the two live Fountain
 probes still print nothing per O9.
 

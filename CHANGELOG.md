@@ -3,6 +3,16 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.23] - 2026-10-04
+
+### Fixed
+- **A Music Index lookup left over from before the cache-table migration is no longer read as a remembered miss, so a release renders its track again instead of falling back to the album.** 1.22.21 moved the positive Music Index transients into the cache table but kept their key — `mi_track_v4_…` / `mi_feed_v4_…` — for remembered misses alone, and the "is a miss remembered?" test is presence-based. On a site that upgraded with a positive still live under that key (they run for 12 hours after the last pre-upgrade view), its own good data was treated as "this guid does not resolve": every lookup returned null, no cache row was written, the page fell back to the feed and rendered the album title alone (or "Album/Song not found" when the feed key held one too), and `queue_mi_refresh()` — which uses the same presence test — refused to queue the background pull that would have repaired the row. The key is now read by a new `mi_take_legacy_positive()`, which tells a legacy payload (a non-empty array with `title`) apart from a genuine miss (`array()`): a legacy positive is returned to the caller — so the lookup succeeds without an API round trip and the caller's store migrates it onto the cache row where it belongs — and is deleted on the way out, so the key cannot be misread again; the same clearing happens before the two presence tests in `queue_mi_refresh()` and `run_queued_mi_refresh()`, so the background refresh is no longer blocked either. Remembered misses keep short-circuiting exactly as before.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.29] - 2026-10-04
+
+### Fixed
+- **Identical to Resolver 1.22.23 — a Music Index lookup left over from before the cache-table migration is no longer read as a remembered miss, so a release renders its track again instead of falling back to the album.** The `_pro_` keys (`mi_track_pro_v4_…` / `mi_feed_pro_v4_…`) held positives until 1.20.27 and hold only remembered misses since; a positive still live from <= 1.20.26 made presence look like "not found", so lookups returned null, the page rendered the album alone and `queue_mi_refresh()` refused to run. The new `mi_take_legacy_positive()` returns and deletes a legacy payload (non-empty array with `title`) while leaving genuine misses (`array()`) to short-circuit exactly as before, and clears the key before the same presence tests in `queue_mi_refresh()` / `run_queued_mi_refresh()`.
+
 ## Resolver (v4v-musiclink) — [1.22.22] - 2026-10-04
 
 ### Added
