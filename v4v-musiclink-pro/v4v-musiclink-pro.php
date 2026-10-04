@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.28
+ * Version: 1.20.29
  * Author: Matt Finlay
  *
  * USAGE:
@@ -2575,7 +2575,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.28', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.29', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -3995,6 +3995,15 @@ JS;
 	 */
 	private function mi_fetch_feed( $feed_guid ) {
 		$negative_key = $this->mi_negative_key( 'feed', $feed_guid, '' );
+
+		// A positive left under this key by <= 1.20.26 is data, not a
+		// miss: hand it back (the caller stores it on the row), so the
+		// release keeps rendering without an API round trip.
+		$legacy = $this->mi_take_legacy_positive( $negative_key );
+		if ( null !== $legacy ) {
+			return $legacy;
+		}
+
 		if ( false !== get_transient( $negative_key ) ) {
 			return null;
 		}
@@ -4018,6 +4027,14 @@ JS;
 	 */
 	private function mi_fetch_track( $feed_guid, $track_guid ) {
 		$negative_key = $this->mi_negative_key( 'track', $feed_guid, $track_guid );
+
+		// Same as mi_fetch_feed(): a <= 1.20.26 positive under this key
+		// is the track lookup's own cached result, not a miss.
+		$legacy = $this->mi_take_legacy_positive( $negative_key );
+		if ( null !== $legacy ) {
+			return $legacy;
+		}
+
 		if ( false !== get_transient( $negative_key ) ) {
 			return null;
 		}
@@ -4091,13 +4108,44 @@ JS;
 	 * branch 3 and the background pull both check first. Unchanged
 	 * formula from the old positive/negative shared key (the `_pro_`
 	 * keeps this plugin's misses in their own keyspace): the positives
-	 * have moved to the cache table, so this key now only ever holds
-	 * remembered misses.
+	 * have moved to the cache table, so since 1.22.21/1.20.27 this key
+	 * only ever holds remembered misses - but a positive written by an
+	 * earlier version can still be sitting under it, see
+	 * mi_take_legacy_positive().
 	 */
 	private function mi_negative_key( $kind, $album, $track ) {
 		return 'feed' === $kind
 			? 'mi_feed_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album )
 			: 'mi_track_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album . '|' . $track );
+	}
+
+	/**
+	 * Reads that shared key while telling apart the two things it has
+	 * held: a remembered miss (the empty array written since 1.20.27)
+	 * and, from a site that upgraded with it still live, a POSITIVE
+	 * cache from <= 1.20.26 - the parsed lookup result, which moved into
+	 * the cache table in 1.20.27 without ever being migrated out of
+	 * transients. Presence alone therefore cannot mean "miss": taken for
+	 * one, a release's own good data makes every lookup return null, so
+	 * the page renders as the album alone (or "Album/Song not found"),
+	 * no row is written, and the background refresh is refused for as
+	 * long as the old 12-hour TTL lasts.
+	 *
+	 * Returns the legacy payload after deleting it - one-shot, so the
+	 * key can never be misread again and the caller's store writes the
+	 * data onto the cache row where it now belongs - or null when the
+	 * key holds a genuine miss (or nothing at all).
+	 */
+	private function mi_take_legacy_positive( $key ) {
+		$cached = get_transient( $key );
+
+		if ( ! is_array( $cached ) || ! isset( $cached['title'] ) ) {
+			return null;
+		}
+
+		delete_transient( $key );
+
+		return $cached;
 	}
 
 	/**
@@ -4159,13 +4207,19 @@ JS;
 			return;
 		}
 
-		$hash   = $this->cache_row_hash( $album, $track );
-		$marker = 'v4v_musiclink_pro_mi_attempt_' . md5( $hash );
+		$hash         = $this->cache_row_hash( $album, $track );
+		$marker       = 'v4v_musiclink_pro_mi_attempt_' . md5( $hash );
+		$negative_key = $this->mi_negative_key( $kind, $album, $track );
 
 		// A remembered failure, or an attempt already in flight: this row
 		// is spoken for - do nothing. (The failure transient holds an
-		// empty array, so the check is "is set", never "is truthy".)
-		if ( false !== get_transient( $this->mi_negative_key( $kind, $album, $track ) ) ) {
+		// empty array, so the check is "is set", never "is truthy".) A
+		// positive left under the same key by <= 1.20.26 is neither of
+		// those: dropping it here stops it from blocking the pull that
+		// replaces it with fresh data.
+		$this->mi_take_legacy_positive( $negative_key );
+
+		if ( false !== get_transient( $negative_key ) ) {
 			return;
 		}
 		if ( get_transient( $marker ) ) {
@@ -4211,7 +4265,10 @@ JS;
 			$hash  = $this->cache_row_hash( $album, $track );
 
 			// A failure remembered since the queue was taken: skip; the
-			// row's next view re-queues once that transient expires.
+			// row's next view re-queues once that transient expires. A
+			// <= 1.20.26 positive under the same key is not a failure -
+			// clearing it lets the fetch below migrate it onto the row.
+			$this->mi_take_legacy_positive( $this->mi_negative_key( $kind, $album, $track ) );
 			if ( false !== get_transient( $this->mi_negative_key( $kind, $album, $track ) ) ) {
 				continue;
 			}
