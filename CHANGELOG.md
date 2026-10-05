@@ -3,6 +3,18 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.26] - 2026-10-05
+
+### Changed
+
+- **Fountain failure now lands on a Fountain search for the release** — when resolution fails (no cached link and `fountain_resolve()` returns nothing) and a title is known, the Fountain button points at `https://fountain.fm/search?q=<quoted title>` (double quotes are Fountain's exact-phrase syntax, encoded by PHP `urlencode()`), instead of the generic `fountain.fm/discover` page; with no title to pre-fill the old default stands. Search URLs are just as generic as `discover`, so they are still **never** written to the stored-links table. The confirm-first modal (and its launch logging) now also recognises the `search?` prefix as a fallback. Plugin headers, settings help text and the README updated accordingly.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.32] - 2026-10-05
+
+### Changed
+
+- **Fountain failure now lands on a Fountain search for the release** — identical to Resolver 1.22.26, including the modal's extended fallback matcher.
+
 ## Resolver (v4v-musiclink) — [1.22.25] - 2026-10-05
 
 ### Added
