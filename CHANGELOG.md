@@ -3,6 +3,26 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.25] - 2026-10-05
+
+### Added
+
+- **Random music app button order** — new opt-in "Random order" tickbox in the Settings tab, directly under the Music apps table (option `v4v_musiclink_random_app_order`, boolean, default off, registered alongside the existing display options with `rest_sanitize_boolean`). When enabled, `render_html()` marks the app list `data-v4v-shuffle="1"` and emits a tiny inline Fisher-Yates script immediately after it: on every page load — including refreshes and pages served from a full-page cache — the browser re-orders the buttons, while the saved Order column and the server-emitted list stay exactly as configured. The same `<li>` nodes are moved (so `data-app` attributes and any Pro beacon listeners survive), the flag is flipped to `"0"` so a second shortcode's script copy doesn't re-shuffle, and the script is only emitted with the option on and more than one button; with the option off the markup is byte-for-byte unchanged, and without JavaScript visitors simply see the configured order.
+
+### Removed
+
+- **Legacy DB-migration code** (both plugins, no behaviour change) — `migrate_legacy_links_table()` (the v1→v2 `url`/`app` ALTER/UPDATE/DELETE emulation), the old `{prefix}v4v_musiclink_stored_links` row copy + `DROP TABLE` + `delete_option( '..._stored_links_table_version' )` block inside `maybe_create_cache_table()`, and `mi_take_legacy_positive()` with its four call sites and docblock tails. Safe because the live site ran the old-table copy when 1.22.17 shipped (2026-09-26), positives stopped being written at 1.22.21 (2026-10-04) and their 12 h TTLs expired by 2026-10-05, and the pruned block was already unreachable on the live database (the version flag is checked on every load). Table creation, the `*_table_version` bump mechanism and all row-data shapes are untouched; the fresh-install path is covered by a new harness test (M0).
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.31] - 2026-10-05
+
+### Added
+
+- **Random music app button order** — identical to Resolver 1.22.25, with the option named `v4v_musiclink_pro_random_app_order` and the same client-side, cache-friendly shuffle behaviour.
+
+### Removed
+
+- **Legacy DB-migration code** — identical to Resolver 1.22.25 (Pro keeps its `maybe_create_log_table()` create + alter-in-place dbDelta and all log/row shapes); `mi_take_legacy_positive()` and its four call sites removed alongside the standard plugin's.
+
 ## Resolver (v4v-musiclink) — [1.22.24] - 2026-10-05
 
 ### Fixed

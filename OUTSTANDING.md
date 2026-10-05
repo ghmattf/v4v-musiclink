@@ -14,7 +14,7 @@ or **explicitly declined**. Implemented history is never here - it is in
 **Status key:** **Planned** = user picked it, plan below, implement only on
 request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 
-Line numbers below predate Resolver 1.22.24 / Pro 1.20.30 (2026-10-05)
+Line numbers below predate Resolver 1.22.25 / Pro 1.20.31 (2026-10-05)
 unless a note says otherwise; they will drift - re-locate by symbol name.
 
 ---
@@ -478,130 +478,6 @@ leave them (diagnostics, not gates).
 
 ---
 
-## O16. Random music app button order (settings tickbox, fresh order on every page load)
-
-**Status: Planned** (user specified the design 2026-10-05 and sharpened it
-the same day: a tickbox in the Music Apps area of settings, BOTH plugins;
-enabled = a REFRESHED/re-rendered page shows a NEW random order every
-time; the settings order is never changed. Implemented the same day,
-uncommitted - remove this item when the release ships).
-
-**What:** opt-in boolean setting. Off (default) => output byte-identical
-to today's admin-configured order, no script. On => every page load
-(including refreshes, and including pages served from a full-page cache)
-shuffles the buttons into a fresh order. The Order column, its arrows and
-the saved `..._apps[slug][order]` values are never touched.
-
-**Why client-side:** the live site is page-cached (cf. O18 - query params
-are "frozen by page cache"), so a server-side-only `shuffle()` would be
-generated once per cache entry and a refresh would keep showing the SAME
-order. The shuffle therefore runs in the browser, on each load.
-
-**Setting:** `v4v_musiclink_random_app_order` /
-`v4v_musiclink_pro_random_app_order`, registered with the existing
-options (std `register_settings()` ~226 / pro ~1844) using the codebase's
-boolean pattern: `type => boolean`, `sanitize_callback =>
-rest_sanitize_boolean`, `default => false` (same as `..._show_header`).
-
-**Settings UI:** one new `<tr>` in the Settings tab directly after the
-"Music apps" row (std `render_settings_page()` row at ~466, pro ~2193),
-th label "Random order": hidden `value="0"` input + tickbox `value="1"` +
-`checked()` - the pattern Pro's "Log interactions" field uses (pro
-~2357), which avoids the unchecked-checkbox POST problem. Description
-text: shuffles the rendered buttons only (the table's Order column stays
-as configured); a new order on every page load and refresh, even when
-the page comes from a cache; without JavaScript the configured order is
-shown.
-
-**Mechanism:** server output is UNCHANGED - `render_html()` still emits
-the list in admin order (std `<ul class="v4v-musiclink-list">`, pro
-`<ul class="v4v-musiclink-pro-list">`). When the option is on AND there
-is more than one button:
-- the `<ul>` gets `data-v4v-shuffle="1"`, and
-- a tiny inline `<script>` is emitted immediately after the list: an IIFE
-  that queries `[data-v4v-shuffle]`, Fisher-Yates shuffles each list's
-  children, re-appends the same nodes, and sets the flag to `"0"` so a
-  second shortcode's copy of the script doesn't re-shuffle lists already
-  handled. Same nodes are moved, so `data-app` attributes and any Pro
-  beacon listeners survive untouched (logging is slug-keyed and
-  order-agnostic); runs during parse, before the rest paints, so no
-  visible layout shift.
-- Option off, or 0-1 buttons => no attribute, no script (byte-for-byte
-  today's markup).
-- No JS / JS blocked => configured order (graceful fallback).
-
-**Tests:** extend `tmp/test_stored_links.php` (loads BOTH classes and
-renders both settings pages + shortcode output):
-(a) the tickbox renders in both settings pages with the right name and
-help text;
-(b) regression guard (option absent AND option on): the server-emitted
-list order equals the configured admin order - no harness pins
-front-end order today;
-(c) option on with >=3 formulaic apps enabled => `data-v4v-shuffle="1"`
-present on the `<ul>` and the inline script contains the shuffle routine
-(marker + selector), and contains no `</script>` string;
-(d) option off => no `data-v4v-shuffle` and no shuffle script anywhere in
-the output;
-(e) settings table row order unchanged with option on.
-`tmp/e2e/gen_page.php` (option off in its fixture) must stay green
-unchanged. README has no app-order section; CHANGELOG entries at
-release.
-
-**Rejected/absent:** no server-side shuffle (frozen by page cache, and
-redundant once the browser re-rolls), no per-post/per-day seeding, no
-shortcode attribute override, no per-app flag.
-
-**Release:** ships via the normal flow (bump/changelog/tag); remove this
-item then.
-
----
-
-## O17. Legacy DB-migration paths are only load-bearing for the one live site
-
-**Status: Planned** (user picked 2026-10-05; implemented the same day,
-uncommitted - remove this item when the release ships).
-
-**What was implemented (2026-10-05, both plugin files, ~326 lines
-removed / 30 added):** the three historical families are gone; table
-**creation** and the `*_table_version` bump mechanism are untouched:
-- `migrate_legacy_links_table()` v1->v2 `url`/`app` ALTER/UPDATE/DELETE
-  emulation - function deleted outright.
-- the old `..._stored_links` row copy + `DROP TABLE` +
-  `delete_option( '..._stored_links_table_version' )` block inside
-  `maybe_create_cache_table()` - the method is now version-check ->
-  `create_cache_table()` -> `update_option()`.
-- `mi_take_legacy_positive()` plus its four call sites (`mi_fetch_feed`,
-  `mi_fetch_track`, `queue_mi_refresh`, `run_queued_mi_refresh`) and the
-  docblock tails in `mi_negative_key`, `row_has_mi`, `CACHE_TABLE_VERSION`
-  and `LINK_COLUMNS`.
-Kept deliberately: Pro `maybe_create_log_table()` (create +
-alter-in-place in one dbDelta), all row-data shapes (NULL
-`mi_updated_at`, "migrated row counts"), and the version-flag mechanism.
-
-**Safety basis (no DB access existed to check by SQL):** the live site
-ran the old-table copy when 1.22.17 / 1.20.23 shipped 2026-09-26;
-positives stopped being written at 1.22.21 / 1.20.27 (2026-10-04) and
-their 12 h TTLs expired by 2026-10-05; `maybe_create_cache_table()` runs
-on every load behind the version flag, so the pruned block was already
-unreachable on the live DB. Git dates + code-path reasoning substitute
-for the live queries.
-
-**Tests:** `tmp/test_stored_links.php` reworked - L1 legacy-positive
-checks, M1/M2 migration tests and the fake-wpdb emulation for ALTER /
-fixup UPDATEs / `INSERT IGNORE ... SELECT` / `SHOW COLUMNS` deleted; new
-M0 asserts a fresh install (version flag absent) runs dbDelta against the
-cache schema, stamps the flag, issues no legacy SQL, and no-ops on the
-second call. Verification: `./php/php -l` clean on both plugins; 926
-offline assertions across the 11 harnesses + `tmp/e2e/gen_page.php` green;
-`fountain_live_test` 20/20. The two MI-search live harnesses fail on an
-upstream 404 unrelated to this change (reproduces with the work stashed;
-see O20).
-
-**Remaining:** commit + release flow (bump, changelog, tag), then delete
-this item.
-
----
-
 ## O18. New shortcode parameter accepting a direct fountain.fm link (both versions) - attribute only, never a URL query param
 
 **Status: On hold** (user deferred 2026-10-05 - scope and precedence
@@ -778,9 +654,10 @@ picks it.
 **What:** `./php/php tmp/fountain_candidate_test.php` and
 `./php/php tmp/fountain_case_test.php` receive `HTTP 404`, body
 `Server action not found.` (24 bytes), from `https://api.musicindex.org`
-on every request - each was re-run once, and it reproduces with the O17
-work stashed, so it is an upstream API-side routing change, independent
-of the DB-migration prune. `fountain_live_test` (Fountain side) still
+on every request - each was re-run once, and it reproduces with the
+previous release checked out too, so it is an upstream API-side routing
+change, independent of the DB-migration prune that shipped in
+Resolver 1.22.25 / Pro 1.20.31. `fountain_live_test` (Fountain side) still
 passes 20/20 and all 11 offline harnesses are green.
 
 **Plan sketch:** probe `https://api.musicindex.org/v1/...` by hand to see
