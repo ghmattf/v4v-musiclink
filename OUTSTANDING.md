@@ -459,6 +459,131 @@ Fountain hit => POST attempted; row present => both still honoured.
 
 ---
 
+## O15. Fountain failure should land on a Fountain *search result* for the release, not on `fountain.fm/discover`
+
+**Status: Planned** (user picked this 2026-10-05; implement only on request).
+
+**What:** when Fountain resolution fails (no cached link and
+`fountain_resolve()` returns nothing), the button's fallback target becomes
+a Fountain search URL pre-filled with the release text instead of the
+generic `https://fountain.fm/discover` page:
+
+    https://fountain.fm/search?q=%22here%27s+the+album+title%22
+
+i.e. `'https://fountain.fm/search?q=' . urlencode( '"' . $text . '"' )` -
+the double quotes are part of the phrase (Fountain's exact-phrase syntax),
+apostrophes/spaces encode as `%27`/`+`, which is exactly what PHP
+`urlencode()` already produces for that string.
+
+**Why:** the current fallback sends a visitor to Fountain's generic discover
+page and makes them search by hand, when the title we were just resolving is
+known - one click should land them on the results for *this* release. This
+is the failure path a visitor sees most (redeploy windows, releases Fountain
+does not index), so the quality of that landing page matters.
+
+**Verified 2026-10-05:** the example URL returns **HTTP 200** (~253 KB); the
+`q` value is not echoed in the server HTML and no search HTML is server-
+rendered, so results are filled in client-side - the URL form itself is
+sufficient (nothing server-side to author).
+
+**Sites (std; pro is the mirror):**
+- Assignment: `render()` `$fountain_url = 'https://fountain.fm/discover'`
+  std **1728** / pro **3210**, plus the success-branch guard-comment std
+  1760-1763 / pro ~3243. The default is set *before* the search text
+  exists; `$fountain_search_text` (track title, else album title - the same
+  text self-heal searched with) is only computed std **1748** / pro ~3230
+  inside the cache-miss branch, so the search fallback has to be built after
+  that (cached deep links overwrite the default anyway).
+- Edge: empty `$fountain_search_text` (no MI data at all) => keep
+  `fountain.fm/discover`; there is no query to pre-fill.
+- **Never-persist rule unchanged:** a search URL is just as generic as
+  `discover` - never write it into the stored-links table (`store_fountain_link`
+  is only called on a real hit, std 1764).
+- Modal click intercept: std **1547-1557** / pro **2940-2953** - `isFallback`
+  compares `href === "https://fountain.fm/discover"` (plus the bare
+  homepage for hand-set links). It must additionally recognise the
+  `https://fountain.fm/search?` prefix, otherwise the confirm-first modal
+  (and its launch logging) silently stops firing for the new fallback.
+- Docs/comments naming the old fallback: plugin headers std 26, 62 / pro 26,
+  56; settings help text std 603 / pro 2439; inline comment std 1724;
+  `fountain_negative_cache_ttl()` docblock std 2000 / pro 3722; README row
+  README.md line 48.
+
+**Plan sketch:** build the search URL where `$fountain_search_text` becomes
+known and use it as `$fountain_url`'s default (keep `discover` for the empty-
+text case); teach the modal's `isFallback` the `search?` prefix while
+keeping the exact-`discover` and bare-homepage matches; refresh the four
+docs/comments + README; update the tests that pin the current fallback -
+`tmp/test_stored_links.php` S3 (689-696: "discover fallback rendered /
+never stored" => assert the search URL is rendered and still never stored),
+`tmp/e2e/gen_page.php` 34, 150, 320 (`'fountain fallback href /discover'`
+=> search URL), and check `tmp/fountain_fix_test.php` for any fallback
+assertions. Probes `probe_site.php` / `probe_site2.php` merely *detect*
+`fountain.fm/discover` in a live page body - extend their detection or
+leave them (diagnostics, not gates).
+
+---
+
+## O16. Random music app button order
+
+**Status: Planned** (user asked for this to be planned 2026-10-05;
+implement only on request).
+
+**What:** an opt-in mode that shuffles the front-end order of the app
+buttons (YouTube / Spotify / Fountain / Stablekraft / ...) instead of
+always showing the admin-configured fixed order. Presumed rationale: equal
+exposure for every app rather than burying whatever sits last in the
+Order column.
+
+**Where (std; pro is the mirror):**
+- Front end: `[musiclink]` -> `render()` (registered 201; pro
+  `[musiclink_pro]` 271) assembles `$links`, then orders it via
+  `sort_links_by_app_order()` called std **1777** / pro **3259**; the helper
+  is defined std **373-385** / pro **2163-2175** and walks
+  `ordered_app_registry()` (std **349** / pro **2139**), which reads the
+  admin option `v4v_musiclink_apps[slug][order]`.
+- Admin side: the Order column + arrow buttons live in
+  `render_settings_page()` (row loop std ~465, position JS std 562-563,
+  help text std 521 "Use the arrows in the Order column ..."), saved by
+  `sanitize_apps_settings()` std **297** / pro **2087**, registered std
+  **236** / pro **1954**. That feature shipped as "Admin-configurable
+  Music apps order" (CHANGELOG ~line 305 area for Pro; same for Resolver).
+- **Do not** shuffle `ordered_app_registry()` itself - it feeds the admin
+  table, so randomization belongs only in the assembled front-end `$links`.
+  Launch logging (keyed by app slug) and the stored-links tooling are
+  order-agnostic and untouched.
+
+**Open decisions:**
+1. *Reshuffle scope*: every render, per post, or per day - and should all
+   `[musiclink]` blocks on one page agree? Independent `shuffle()` gives
+   each block its own order; a seeded RNG
+   (`mt_srand( crc32( get_the_ID() . $period ) )`) makes one post stable
+   within its window while still varying across posts/time.
+2. *Page-cache interaction*: a full-page cache freezes whatever order was
+   generated until the next purge, so server-side shuffling means "random
+   per cache generation", not per view. Server-side is still the
+   recommendation (no CLS, no DOM reordering); true per-view would need a
+   client-side shuffle, which reorders tab order and can jump layout.
+   Whichever is chosen has to be said plainly in the help text.
+3. *Setting shape*: a single new option (e.g.
+   `v4v_musiclink_button_order` = `fixed` | `random`, default `fixed`)
+   registered next to the others with a control above/below the apps
+   table, versus a per-app flag - per-app looks like the wrong granularity.
+
+**Plan sketch:** register + sanitize the new option; add a small
+`maybe_shuffle_links()` step where `sort_links_by_app_order()` is called
+(std 1777 / pro 3259) so the base order still comes from the admin arrows
+and `fixed` reproduces today's output byte-for-byte; leave the admin UI,
+stored links and logging alone; new harness assertions (default mode
+unchanged, random mode returns a permutation of the same enabled slugs,
+seeded mode repeats within its window); both plugins; settings help text
+for the cache caveat. No current harness pins the front-end button order
+(`test_stored_links` asserts admin *column* order; `e2e/gen_page` the
+script stack), so nothing existing should break - but a regression
+assertion for the default mode should be added alongside.
+
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **Fountain self-heal stays inline** (security review finding #5):
