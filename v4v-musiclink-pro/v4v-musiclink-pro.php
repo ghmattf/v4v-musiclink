@@ -184,7 +184,8 @@ class V4V_Music_Link_Resolver_Pro {
 	 * 1 = one row per release holding Music Index metadata (titles, artist,
 	 *     art, mi_updated_at) plus the Fountain link (fountain_url,
 	 *     fountain_updated_at), keyed on lookup_hash. Supersedes the old
-	 *     stored-links table, which is migrated into this one and dropped.
+	 *     stored-links table (whose migration code has been removed - no
+	 *     installation left could need it).
 	 */
 	const CACHE_TABLE_VERSION = 1;
 
@@ -192,7 +193,7 @@ class V4V_Music_Link_Resolver_Pro {
 	 * The link column each app stores its resolved URL in, keyed by app
 	 * slug. Rows are shared across apps (one per release), so another app
 	 * joining later means: its own column in CREATE TABLE plus a version
-	 * bump and a migration step, one entry in this map, and one field in
+	 * bump, one entry in this map, and one field in
 	 * the tab - not another row.
 	 */
 	const LINK_COLUMNS = array( 'fountain' => 'fountain_url' );
@@ -1166,13 +1167,18 @@ class V4V_Music_Link_Resolver_Pro {
 	 * --------------------------------------------------------------------- */
 
 	/**
-	 * Creates the cache table if it doesn't exist yet, migrating the old
-	 * stored-links table into it on the way. Checked on every load behind
-	 * a cheap option flag rather than relying solely on
+	 * Creates the cache table if it doesn't exist yet. Checked on every
+	 * load behind a cheap option flag rather than relying solely on
 	 * register_activation_hook, since updates to this plugin are typically
 	 * deployed by overwriting the file in place without a
 	 * deactivate/reactivate cycle - which means a normal activation hook
 	 * would never fire for this change. Same pattern as the log table.
+	 *
+	 * The migrations that used to run here first (the v1 stored-links
+	 * fixup, then the copy of the old table into this one) have been
+	 * removed: only an installation predating 1.20.23 could have needed
+	 * them, and because every step was gated on columns/tables actually
+	 * being present, a fresh install never ran them either.
 	 *
 	 * Each step is individually re-runnable, so a run interrupted half-way
 	 * resumes on the next load instead of failing.
@@ -1182,109 +1188,9 @@ class V4V_Music_Link_Resolver_Pro {
 			return;
 		}
 
-		// A not-yet-v2 OLD table still has `url`/`app` columns and the
-		// copy below needs `fountain_url`, so the legacy fixup runs first.
-		// Its SHOW-COLUMNS guards no-op when the old table is absent.
-		self::migrate_legacy_links_table();
-
 		self::create_cache_table();
 
-		// Copy the old table over (exact name match - never SHOW TABLES
-		// LIKE, whose "_" is a single-character wildcard).
-		global $wpdb;
-		$old_table  = $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
-		$new_table  = $wpdb->prefix . 'v4v_musiclink_pro_cache';
-		$tables     = $wpdb->get_col( 'SHOW TABLES' );
-		$tables     = is_array( $tables ) ? $tables : array();
-		$old_exists = in_array( $old_table, $tables, true );
-
-		if ( $old_exists ) {
-			// The hash formula is unchanged, so rows copy verbatim;
-			// image_url stays '' and mi_updated_at stays NULL, so the
-			// first view serves the copied titles and queues the
-			// background pull that fills art + timestamp (zero blocking
-			// on upgrade). fountain_updated_at is the old updated_at.
-			$copy_sql = "INSERT IGNORE INTO {$new_table}
-				(lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, fountain_updated_at)
-				SELECT lookup_hash, album_guid, track_guid, album_title, track_title, artist, fountain_url, updated_at
-				FROM {$old_table}";
-
-			$wpdb->query( $copy_sql );
-
-			$old_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$old_table}" );
-			$new_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$new_table}" );
-
-			if ( $old_count !== $new_count ) {
-				// One retry for a copy interrupted mid-flight, then drop
-				// regardless: a row written in the copy window is lost and
-				// re-resolves on its next view - cache semantics.
-				$wpdb->query( $copy_sql );
-			}
-
-			$wpdb->query( "DROP TABLE IF EXISTS {$old_table}" );
-		}
-
-		delete_option( 'v4v_musiclink_pro_stored_links_table_version' );
 		update_option( 'v4v_musiclink_pro_cache_table_version', self::CACHE_TABLE_VERSION );
-	}
-
-	/**
-	 * One-time v1 -> v2 rewrite of the legacy stored-links table: carry
-	 * the resolved link into the per-app column, collapse any pair of rows
-	 * that differed only by app, rebuild the hash for the new row
-	 * identity, then drop the two columns v1 needed. Every step is
-	 * guarded by the columns really present, so a run interrupted
-	 * half-way resumes on the next load instead of failing, and a table
-	 * that was never at v1 no-ops.
-	 *
-	 * Nothing is re-resolved here: the link is copied, so a release whose
-	 * URL a page view already earned keeps it across the upgrade. This
-	 * only ever touches the OLD table - the cache copy happens in
-	 * maybe_create_cache_table() afterwards.
-	 */
-	private static function migrate_legacy_links_table() {
-		global $wpdb;
-		$table = $wpdb->prefix . 'v4v_musiclink_pro_stored_links';
-
-		$cols = $wpdb->get_col( "SHOW COLUMNS FROM {$table}" );
-		$cols = is_array( $cols ) ? $cols : array();
-
-		$has_url = in_array( 'url', $cols, true );
-		$has_app = in_array( 'app', $cols, true );
-
-		if ( ! $has_url && ! $has_app ) {
-			return;
-		}
-
-		if ( $has_url ) {
-			if ( ! in_array( 'fountain_url', $cols, true ) ) {
-				$wpdb->query( "ALTER TABLE {$table} ADD COLUMN fountain_url TEXT NOT NULL" );
-			}
-
-			$wpdb->query( "UPDATE {$table} SET fountain_url = url" );
-		}
-
-		// v1 allowed one row per (app, release); v2 is one per release, so
-		// pairs that differ only by app collapse into the oldest row. (Only
-		// Fountain has ever written rows, so in practice this changes
-		// nothing - it just keeps the unique lookup_hash satisfiable.)
-		$wpdb->query(
-			"DELETE t1 FROM {$table} t1 INNER JOIN {$table} t2
-			 ON t1.album_guid = t2.album_guid AND t1.track_guid = t2.track_guid
-			 AND t1.id > t2.id"
-		);
-
-		// The row identity lost the app, so rebuild the hash to match
-		// cache_row_hash(). Runs before the drops, while both old
-		// columns are still available for the dedupe above.
-		$wpdb->query( "UPDATE {$table} SET lookup_hash = SHA1( CONCAT( album_guid, '|', track_guid ) )" );
-
-		if ( $has_url ) {
-			$wpdb->query( "ALTER TABLE {$table} DROP COLUMN url" );
-		}
-		if ( $has_app ) {
-			$wpdb->query( "ALTER TABLE {$table} DROP COLUMN app" );
-		}
 	}
 
 	private static function create_cache_table() {
@@ -4062,14 +3968,6 @@ JS;
 	private function mi_fetch_feed( $feed_guid ) {
 		$negative_key = $this->mi_negative_key( 'feed', $feed_guid, '' );
 
-		// A positive left under this key by <= 1.20.26 is data, not a
-		// miss: hand it back (the caller stores it on the row), so the
-		// release keeps rendering without an API round trip.
-		$legacy = $this->mi_take_legacy_positive( $negative_key );
-		if ( null !== $legacy ) {
-			return $legacy;
-		}
-
 		if ( false !== get_transient( $negative_key ) ) {
 			return null;
 		}
@@ -4093,13 +3991,6 @@ JS;
 	 */
 	private function mi_fetch_track( $feed_guid, $track_guid ) {
 		$negative_key = $this->mi_negative_key( 'track', $feed_guid, $track_guid );
-
-		// Same as mi_fetch_feed(): a <= 1.20.26 positive under this key
-		// is the track lookup's own cached result, not a miss.
-		$legacy = $this->mi_take_legacy_positive( $negative_key );
-		if ( null !== $legacy ) {
-			return $legacy;
-		}
 
 		if ( false !== get_transient( $negative_key ) ) {
 			return null;
@@ -4174,44 +4065,13 @@ JS;
 	 * branch 3 and the background pull both check first. Unchanged
 	 * formula from the old positive/negative shared key (the `_pro_`
 	 * keeps this plugin's misses in their own keyspace): the positives
-	 * have moved to the cache table, so since 1.22.21/1.20.27 this key
-	 * only ever holds remembered misses - but a positive written by an
-	 * earlier version can still be sitting under it, see
-	 * mi_take_legacy_positive().
+	 * have moved to the cache table, so this key only ever holds
+	 * remembered misses.
 	 */
 	private function mi_negative_key( $kind, $album, $track ) {
 		return 'feed' === $kind
 			? 'mi_feed_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album )
 			: 'mi_track_pro_v' . self::CACHE_SCHEMA_VERSION . '_' . md5( $album . '|' . $track );
-	}
-
-	/**
-	 * Reads that shared key while telling apart the two things it has
-	 * held: a remembered miss (the empty array written since 1.20.27)
-	 * and, from a site that upgraded with it still live, a POSITIVE
-	 * cache from <= 1.20.26 - the parsed lookup result, which moved into
-	 * the cache table in 1.20.27 without ever being migrated out of
-	 * transients. Presence alone therefore cannot mean "miss": taken for
-	 * one, a release's own good data makes every lookup return null, so
-	 * the page renders as the album alone (or "Album/Song not found"),
-	 * no row is written, and the background refresh is refused for as
-	 * long as the old 12-hour TTL lasts.
-	 *
-	 * Returns the legacy payload after deleting it - one-shot, so the
-	 * key can never be misread again and the caller's store writes the
-	 * data onto the cache row where it now belongs - or null when the
-	 * key holds a genuine miss (or nothing at all).
-	 */
-	private function mi_take_legacy_positive( $key ) {
-		$cached = get_transient( $key );
-
-		if ( ! is_array( $cached ) || ! isset( $cached['title'] ) ) {
-			return null;
-		}
-
-		delete_transient( $key );
-
-		return $cached;
 	}
 
 	/**
@@ -4279,12 +4139,7 @@ JS;
 
 		// A remembered failure, or an attempt already in flight: this row
 		// is spoken for - do nothing. (The failure transient holds an
-		// empty array, so the check is "is set", never "is truthy".) A
-		// positive left under the same key by <= 1.20.26 is neither of
-		// those: dropping it here stops it from blocking the pull that
-		// replaces it with fresh data.
-		$this->mi_take_legacy_positive( $negative_key );
-
+		// empty array, so the check is "is set", never "is truthy".)
 		if ( false !== get_transient( $negative_key ) ) {
 			return;
 		}
@@ -4331,10 +4186,7 @@ JS;
 			$hash  = $this->cache_row_hash( $album, $track );
 
 			// A failure remembered since the queue was taken: skip; the
-			// row's next view re-queues once that transient expires. A
-			// <= 1.20.26 positive under the same key is not a failure -
-			// clearing it lets the fetch below migrate it onto the row.
-			$this->mi_take_legacy_positive( $this->mi_negative_key( $kind, $album, $track ) );
+			// row's next view re-queues once that transient expires.
 			if ( false !== get_transient( $this->mi_negative_key( $kind, $album, $track ) ) ) {
 				continue;
 			}

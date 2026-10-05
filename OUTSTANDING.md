@@ -100,84 +100,6 @@ asks.
 
 ---
 
-## O6. Fountain positive cache is keyed on the `next-action` hash, so a redeploy busts every saved link
-
-**Status: Planned** (user picked it 2026-09-26; implement only on request).
-
-**2026-10-04 note (from the O11 triage - read before implementing).** The
-line refs below predate the cache-table work; corrected now: the key is
-std `v4v-musiclink/v4v-musiclink.php:1889` (`set_transient` 1949),
-Pro `v4v-musiclink-pro/v4v-musiclink-pro.php:3611` (`set_transient` 3671);
-`fountain_try_resolve()` std 1884 / Pro 3606; `fountain_path_segment()`
-std 2165 / Pro 3887. Live evidence that the risk in "what" is real: on the
-user's site the ONLY working Fountain deep link is a positive keyed
-`md5(guid | current-option-value)` - it keeps rendering only because O11's
-broken self-heal has never managed to `update_option()` a new id, so the
-keys have stayed stable since before Fountain's redeploy; the day self-heal
-succeeds (or O11's fix persists a fresh id) every cached hit under the old
-value vanishes at once. Note also that O14, if shipped first, ignores these
-positives whenever a cache row is absent - coordinate the two.
-
-**2026-10-05 note (O11 shipped as Resolver 1.22.24 / Pro 1.20.30).** The
-warning above is now live rather than hypothetical: self-heal probes
-candidates and persists the first id that answers, so on the next render
-after a Fountain redeploy every stored `next_action` - and therefore every
-positive's key - changes in one step, and all 30-day hits keyed on the old
-value disappear at once (each release then re-resolves once and re-caches
-under the new key, so the outage is one render per release, not permanent).
-The key/`set_transient` line refs above also moved with the bump; re-locate
-by symbol as always.
-
-**What:** `fountain_try_resolve()` caches a successful resolution for 30
-days under `'fountain_id_v5_' . md5( $guid . '|' . $next_action )`
-(standard `v4v-musiclink/v4v-musiclink.php` key ~line 916,
-`set_transient()` ~line 976; Pro `v4v-musiclink-pro/v4v-musiclink-pro.php`
-key ~line 2642, `set_transient()` ~line 2704, prefix
-`fountain_id_pro_v5_`). The cached value is the hit (`id` + `_type`),
-which depends only on the guid - but because the hash is part of the
-key, a Fountain redeploy changes the key and invalidates every saved
-success. Each already-resolved release then falls back to a POST with
-the now-stale hash, gets a 404, and renders the plain `fountain.fm`
-link until self-heal succeeds. Second-order effect: whether self-heal
-runs at all becomes luck of the draw - a cache hit under the old hash
-returns early from `fountain_resolve()` (standard ~line 880) and never
-reaches the self-heal branch, while a miss under the same old hash
-triggers the full crawl.
-
-**Plan sketch:**
-- Key positives on the guid alone - `fountain_id_v5_<md5(guid)>` /
-  `fountain_id_pro_v5_<md5(guid)>` - and keep storing `id` + `_type`,
-  rebuilding the URL each render through `fountain_path_segment()`
-  (standard ~line 792) rather than caching the raw URL, so a future
-  path-prefix change is still picked up from code. The hash becomes what
-  it really is: a one-time-per-release discovery credential, needed only
-  for releases never seen before.
-- Legacy migration: on a guid-key miss, probe the legacy
-  `md5( guid . '|' . configured-hash )` entry and re-store it under the
-  guid key. During the stale window the option still holds the old
-  hash, so pre-redeploy entries stay reachable and can be rescued
-  instead of being left to age out.
-- Split the negatives by what they mean - today the hash in the key
-  accidentally supplies the scoping, and that must survive explicitly
-  once the positive key drops it: a `404` means *the hash is stale* and
-  says nothing about the guid -> hash-scoped, short TTL, never recorded
-  against the guid; a `200` whose readable hits payload lacks our guid
-  means *Fountain doesn't have this release* -> guid-scoped, keep
-  `FAIL_CACHE_TTL` (1 hour).
-- Both plugins, unchanged per-plugin keyspaces.
-
-**Open question:** if Fountain's *deep URLs* themselves break on a
-redeploy (rather than just the search hash), a guid-keyed positive would
-be trusted for 30 days with no revalidation and would need a
-"re-verify positives older than N days" rule. Resolve by confirming the
-observed symptom: plain `fountain.fm` fallback (this fix is complete on
-its own) vs a deep link Fountain rejects (revalidation policy needed).
-
-**Not covered:** this does not speed up the *first* resolution of a new
-release after a redeploy - that is O7.
-
----
-
 ## O7. Fountain self-heal is slow to recover (or never fires) - diagnosis
 
 **Status: On hold** (user deferred 2026-10-05 - diagnosis kept, nothing
@@ -493,7 +415,7 @@ Fountain hit => POST attempted; row present => both still honoured.
 
 ## O15. Fountain failure should land on a Fountain *search result* for the release, not on `fountain.fm/discover`
 
-**Status: Planned** (user picked this 2026-10-05; implement only on request).
+**Status: Open** (picked 2026-10-05, moved to Open by user the same day).
 
 **What:** when Fountain resolution fails (no cached link and
 `fountain_resolve()` returns nothing), the button's fallback target becomes
@@ -558,8 +480,7 @@ leave them (diagnostics, not gates).
 
 ## O16. Random music app button order
 
-**Status: Planned** (user asked for this to be planned 2026-10-05;
-implement only on request).
+**Status: Open** (planned 2026-10-05, moved to Open by user the same day).
 
 **What:** an opt-in mode that shuffles the front-end order of the app
 buttons (YouTube / Spotify / Fountain / Stablekraft / ...) instead of
@@ -618,45 +539,54 @@ assertion for the default mode should be added alongside.
 
 ## O17. Legacy DB-migration paths are only load-bearing for the one live site
 
-**Status: Open** (identified 2026-10-05 during a "do the plugins still
-need migration code?" review, awaiting triage).
+**Status: Planned** (user picked 2026-10-05; implemented the same day,
+uncommitted - remove this item when the release ships).
 
-**Context:** there are no other installations - every future install is a
-fresh DB, where all migration steps already no-op (old table absent, old
-columns absent, version flag simply unset). What stays mandatory regardless:
-table **creation** (`maybe_create_cache_table()` std 676 / pro 1181, Pro
-`maybe_create_log_table()` 345 + activation hook 4522) and the
-`*_table_version` **bump mechanism** - the one live site upgrades in place,
-so the next schema change ships as `CACHE_TABLE_VERSION` / log `'2'->'3'`
-plus a dbDelta re-run, and settings never need migration (reads default via
-`get_option(..., array())`; missing-key fallbacks are read-side guards).
+**What was implemented (2026-10-05, both plugin files, ~326 lines
+removed / 30 added):** the three historical families are gone; table
+**creation** and the `*_table_version` bump mechanism are untouched:
+- `migrate_legacy_links_table()` v1->v2 `url`/`app` ALTER/UPDATE/DELETE
+  emulation - function deleted outright.
+- the old `..._stored_links` row copy + `DROP TABLE` +
+  `delete_option( '..._stored_links_table_version' )` block inside
+  `maybe_create_cache_table()` - the method is now version-check ->
+  `create_cache_table()` -> `update_option()`.
+- `mi_take_legacy_positive()` plus its four call sites (`mi_fetch_feed`,
+  `mi_fetch_track`, `queue_mi_refresh`, `run_queued_mi_refresh`) and the
+  docblock tails in `mi_negative_key`, `row_has_mi`, `CACHE_TABLE_VERSION`
+  and `LINK_COLUMNS`.
+Kept deliberately: Pro `maybe_create_log_table()` (create +
+alter-in-place in one dbDelta), all row-data shapes (NULL
+`mi_updated_at`, "migrated row counts"), and the version-flag mechanism.
 
-**Candidates for removal** (one-time work that already ran on the live DB;
-each is existence/version-gated and costs only a flag check per load, so
-pruning is optional):
-- `migrate_legacy_links_table()` v1->v2 `url`/`app` ALTERs - std 741-784,
-  pro 1245-1288.
-- old `..._stored_links` row copy + `DROP TABLE` +
-  `delete_option( '..._stored_links_table_version' )` - std 691-723,
-  pro 1195-1227 (ran when 1.22.17 / 1.20.23 shipped).
-- `mi_take_legacy_positive()` transient back-compat (1.22.23 / 1.20.29) -
-  legacy positives had 12 h TTLs and expired long ago; the helper still
-  runs a presence test on every lookup.
+**Safety basis (no DB access existed to check by SQL):** the live site
+ran the old-table copy when 1.22.17 / 1.20.23 shipped 2026-09-26;
+positives stopped being written at 1.22.21 / 1.20.27 (2026-10-04) and
+their 12 h TTLs expired by 2026-10-05; `maybe_create_cache_table()` runs
+on every load behind the version flag, so the pruned block was already
+unreachable on the live DB. Git dates + code-path reasoning substitute
+for the live queries.
 
-**Plan sketch:** confirm live-DB state first (no `{prefix}v4v_musiclink_stored_links`
-table, `..._cache_table_version` = 1, Pro `..._log_table_version` = '2',
-no legacy non-empty `mi_*_v4_*` transients); delete the three families
-above from both plugins; keep creation + version flags untouched (Pro's
-log dbDelta cannot be split - it is both create and alter-in-place); then
-a fresh-install smoke test (empty DB -> one CREATE, no warnings, no
-`SHOW COLUMNS` error on the absent legacy table).
+**Tests:** `tmp/test_stored_links.php` reworked - L1 legacy-positive
+checks, M1/M2 migration tests and the fake-wpdb emulation for ALTER /
+fixup UPDATEs / `INSERT IGNORE ... SELECT` / `SHOW COLUMNS` deleted; new
+M0 asserts a fresh install (version flag absent) runs dbDelta against the
+cache schema, stamps the flag, issues no legacy SQL, and no-ops on the
+second call. Verification: `./php/php -l` clean on both plugins; 926
+offline assertions across the 11 harnesses + `tmp/e2e/gen_page.php` green;
+`fountain_live_test` 20/20. The two MI-search live harnesses fail on an
+upstream 404 unrelated to this change (reproduces with the work stashed;
+see O20).
+
+**Remaining:** commit + release flow (bump, changelog, tag), then delete
+this item.
 
 ---
 
 ## O18. New shortcode parameter accepting a direct fountain.fm link (both versions) - attribute only, never a URL query param
 
-**Status: Planned** (user picked this 2026-10-05; scope confirmed both
-versions and precedence decided the same day - implement only on request).
+**Status: On hold** (user deferred 2026-10-05 - scope and precedence
+decisions from that day are retained below).
 
 **What:** a `fountain` attribute on BOTH shortcodes (`[musiclink]` and
 `[musiclink_pro]`) taking a pre-known direct link, e.g.
@@ -822,6 +752,26 @@ picks it.
 
 ---
 
+## O20. Live Music Index search harnesses get HTTP 404 "Server action not found."
+
+**Status: Open** (identified 2026-10-05; awaiting triage).
+
+**What:** `./php/php tmp/fountain_candidate_test.php` and
+`./php/php tmp/fountain_case_test.php` receive `HTTP 404`, body
+`Server action not found.` (24 bytes), from `https://api.musicindex.org`
+on every request - each was re-run once, and it reproduces with the O17
+work stashed, so it is an upstream API-side routing change, independent
+of the DB-migration prune. `fountain_live_test` (Fountain side) still
+passes 20/20 and all 11 offline harnesses are green.
+
+**Plan sketch:** probe `https://api.musicindex.org/v1/...` by hand to see
+what the search endpoint expects now (method/path/headers vs the
+`mi_api_get()` / `mi_search_hits()` request shape in both plugins); if
+the path or verb moved, update the request builder in both plugins (plus
+any hard-coded paths inside the two harnesses) and re-run them.
+
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **Fountain self-heal stays inline** (security review finding #5):
@@ -847,3 +797,6 @@ picks it.
   chunk walk (search-only delta in full, homepage's first 20 only when the
   delta is empty) so the crawl keeps its pre-fix cost. Re-propose neither
   the heuristic-only variant nor a full-window walk.
+- **O6 guid-keyed Fountain positive cache** (planned 2026-09-26): removed
+  from the work list 2026-10-05 on user instruction; re-propose only on
+  request (full plan preserved in git history).
