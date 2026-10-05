@@ -14,9 +14,21 @@
 - The binary (`php/php`) and its tarball (`php/*.tar.gz`) are **gitignored download artifacts**, so a fresh clone starts without them. Run **`./php/install.sh`** first; it extracts from the local tarball if present, otherwise downloads the pinned version (PHP 8.5.8) for your OS/arch, and no-ops if PHP is already working.
 - Nothing else needs installing: no Composer, no `vendor/`, no Node. The plugins are plain PHP files loaded straight by WordPress.
 
+## Regression tests
+
+The suite is a set of standalone harnesses in `tmp/` (gitignored local scratch until the tracked `tests/` directory lands - tracked in `OUTSTANDING.md` as O4). Run them all from the project root after any change, and always before a release:
+
+```bash
+for f in tmp/test_*.php tmp/*_test.php; do ./php/php "$f"; done
+```
+
+- Each harness prints `N passed, 0 failed` and exits non-zero on any failure; expect `0 failed` from every file.
+- `tmp/fountain_live_test.php`, `tmp/fountain_candidate_test.php` and `tmp/fountain_case_test.php` hit live endpoints and can flake - re-run a failing one once before concluding it is a real regression.
+- `./php/php tmp/e2e/gen_page.php` is an extra smoke check: it regenerates `tmp/e2e/*.html` and verifies the rendered page and script stack.
+
 ## Version control
 
-This project is tracked with git. All changes must be committed; releases are marked with git tags.
+This project is tracked with git. All changes must be committed; releases are marked with git tags. The running list of open items and findings is `OUTSTANDING.md` at the repository root: anything discussed but not implemented the same turn goes there that same turn with enough context to continue, and leaves the list only once it is implemented **and** released (or explicitly declined).
 
 ## Version numbers
 
@@ -66,13 +78,15 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
    ./php/install.sh   # only if ./php/php is missing
    ./php/php -l v4v-musiclink/v4v-musiclink.php && ./php/php -l v4v-musiclink-pro/v4v-musiclink-pro.php
    ```
-3. Bump version(s): `./bump-version.sh` (or `standard` / `pro`) — this commits the
+3. Run the regression harnesses - see [Regression tests](#regression-tests)
+   (all `tmp/test_*.php` / `tmp/*_test.php` files must report `0 failed`).
+4. Bump version(s): `./bump-version.sh` (or `standard` / `pro`) — this commits the
    bumped plugin file(s) itself, subject `Bump Resolver x.y.z` / `Bump Pro x.y.z`.
-4. Add a `CHANGELOG.md` entry for the new version(s).
-5. Commit the docs: `git add CHANGELOG.md && git commit -m "Resolver x.y.z: …"` —
+5. Add a `CHANGELOG.md` entry for the new version(s).
+6. Commit the docs: `git add CHANGELOG.md && git commit -m "Resolver x.y.z: …"` —
    plus `OUTSTANDING.md` if any statuses changed. Never `git add -A` (it would
    sweep in unrelated edits and local scratch).
-6. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` — local only,
+7. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` — local only,
    no remote is configured.
 
 ## Naming conventions (why they matter)
