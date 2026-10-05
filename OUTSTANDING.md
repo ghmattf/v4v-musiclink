@@ -180,22 +180,29 @@ release after a redeploy - that is O7.
 
 ## O7. Fountain self-heal is slow to recover (or never fires) - diagnosis
 
-**Status: Open** (identified 2026-09-26, awaiting triage).
+**Status: On hold** (user deferred 2026-10-05 - diagnosis kept, nothing
+picked; the review notes below are current as of that date).
 
 **What:** why, once self-heal is required, the button takes far too long
 to start working again. Causes found this turn in `fountain_resolve()` /
-`fountain_autodetect_next_action(s)()` (standard lines 874-902, 1029-1125;
-Pro lines 2600-2630, 2755-2848), roughly ranked:
+`fountain_autodetect_next_actions()` (standard `fountain_resolve()` 1847,
+`fountain_try_resolve()` 1914, `fountain_autodetect_next_actions()` 2049,
+`fountain_scan_chunks_for_actions()` 2138; Pro 3569 / 3636 / 3771 / 3860),
+roughly ranked:
 
 1. Positive cache keyed on the hash - see O6 (also makes *whether*
    self-heal runs depend on which guid renders first).
 2. The 15-minute throttle is armed **before** the attempt, unconditionally
-   (standard ~line 1031-1034, Pro ~line 2756-2760), so any outcome -
+   (standard 2050-2054, Pro 3771-3776), so any outcome -
    no candidates, unreachable seed page, aborted crawl - still costs a
    full 15 minutes of no effort, and consecutive failures stack.
 3. The crawl runs synchronously inside the visitor's page render: 2 seed
-   pages x 10s timeout + up to 40 chunks x 8s, plus the stale POST (8s)
-   and retry (8s) ~ worst case ~5.5 minutes in one request. If a
+   pages x 10s timeout + up to 20 delta chunks x 8s (plus up to 20
+   fallback chunks x 8s when the delta is empty - the two-phase gate
+   shipped with 1.22.24), plus the stale POST (8s) and retry (8s) ~ the
+   theoretical worst is still ~6 minutes in one request, but a routine
+   self-heal measured **~10s** on 2026-10-05 (the pre-gate always-walk was
+   34s measured / ~5.5 min worst). If a
    proxy/PHP/client timeout kills it before `update_option()`, the work
    is discarded while the already-committed throttle transient blocks the
    next 15 minutes.
@@ -211,8 +218,9 @@ Pro lines 2600-2630, 2755-2848), roughly ranked:
    candidate (`fountain_autodetect_next_actions()`) and `fountain_resolve()`
    probes them in order - this was O11, released today.
 6. Demand-driven only - no cron. Healing needs a render with a Fountain
-   button that also passes the Music Index lookup (standard ~line 720
-   returns early; MI "not found" is negative-cached for 1 hour), so on a
+   button that also gets a Music Index search text - the attempt is skipped
+   entirely otherwise (standard `render()` 1747-1750; MI "not found" is
+   negative-cached for 1 hour, `FAIL_CACHE_TTL` std 108), so on a
    quiet site attempts are naturally minutes-to-hours apart.
 7. Unverified: site page caching may keep serving plain/stale HTML past
    the plugin's own heal.
@@ -225,6 +233,15 @@ Pro lines 2600-2630, 2755-2848), roughly ranked:
    crawl can still repeat every 15 minutes for such releases. Making the
    negative cache remember *whether* it was parsed (`''` vs a marker) would
    close it; only worth it if the crawl cost ever matters.
+
+**2026-10-05 review (Fountain working again - `fountain_live_test.php`
+20/20 on the 1.22.24 / 1.20.30 release):** with causes 4 and 5 fixed and
+stored links (1.22.17 / 1.20.23) covering every release that has rendered
+once, this item now only concerns the *first* resolution after a redeploy.
+Still live and unchanged: 1 (= O6), 2, 3 (typical cost only - see above),
+6, 7, 8. Cause 3's timeout-discards-the-work hazard remains the sharpest
+one, because the throttle is already committed by then (cause 2). No fix
+picked yet - see the triage question below.
 
 **Plan sketch (options identified, none picked):** ~~validate-on-200 and
 persist regardless of our guid (1+4)~~ done 2026-10-05;
@@ -251,9 +268,10 @@ redeploy, which no stored row covers.
 
 ---
 
-## O9. The two live Fountain probes hardcode a rotated `next-action` token, so they now 404
+## O9. The live Fountain probes hardcode a rotated `next-action` token, so they now 404
 
-**Status: Open** (identified 2026-09-26, awaiting triage).
+**Status: On hold** (user deferred 2026-10-05 - fixture work not picked;
+the plan below is current as of that date).
 
 **What:** `tmp/fountain_candidate_test.php` and `tmp/fountain_case_test.php`
 both POST to `https://fountain.fm/search` with a **hardcoded** `next-action`
@@ -270,8 +288,22 @@ the shipped `fountain_autodetect_next_actions()` does, and it passed 20/20
 against the same endpoint in the same run - so the production search path is
 fine. Neither failing probe loads plugin code for its request either.
 
-**Plan sketch:** make the two probes detect rather than embed - reuse the
-chunk scan `fountain_live_test.php` already has (or call the plugin's
+**Re-verified 2026-10-05 (Fountain working again - `fountain_live_test.php`
+20/20 on the 1.22.24 / 1.20.30 release):** every hardcoded-token file still
+404s on every POST, `Server action not found.` -
+`fountain_case_test.php` (all 4 requests; its deliberate bogus-token
+assertion at line 80 still passes as a 404),
+`fountain_candidate_test.php` (both entries of the fixed list: `605af9c3…`
+and `40654cc3…`), and a **third** live file this item did not know about:
+`fountain_extract_verify.php` (`$SEARCH_ID` line 14, curl POST to
+`/search` - 404 on both header variants it tests). The working ids that day
+were `60f00dce…`, `60f643a9…`, `40089971…`, `60944205…` - rotation
+continued, the fixtures did not. `fountain_search_matrix.php` and
+`fountain_shape_matrix.php` also carry the old hex but make no network
+calls (offline parsing fixtures) - they need no change.
+
+**Plan sketch:** make the three live probes detect rather than embed - reuse
+the chunk scan `fountain_live_test.php` already has (or call the plugin's
 `fountain_autodetect_next_actions()` and feed one candidate from its list
 into the `next-action` header - since 1.22.24 / 1.20.30 it returns a list,
 and the plugin itself probes rather than trusts it);
@@ -581,6 +613,178 @@ for the cache caveat. No current harness pins the front-end button order
 (`test_stored_links` asserts admin *column* order; `e2e/gen_page` the
 script stack), so nothing existing should break - but a regression
 assertion for the default mode should be added alongside.
+
+---
+
+## O17. Legacy DB-migration paths are only load-bearing for the one live site
+
+**Status: Open** (identified 2026-10-05 during a "do the plugins still
+need migration code?" review, awaiting triage).
+
+**Context:** there are no other installations - every future install is a
+fresh DB, where all migration steps already no-op (old table absent, old
+columns absent, version flag simply unset). What stays mandatory regardless:
+table **creation** (`maybe_create_cache_table()` std 676 / pro 1181, Pro
+`maybe_create_log_table()` 345 + activation hook 4522) and the
+`*_table_version` **bump mechanism** - the one live site upgrades in place,
+so the next schema change ships as `CACHE_TABLE_VERSION` / log `'2'->'3'`
+plus a dbDelta re-run, and settings never need migration (reads default via
+`get_option(..., array())`; missing-key fallbacks are read-side guards).
+
+**Candidates for removal** (one-time work that already ran on the live DB;
+each is existence/version-gated and costs only a flag check per load, so
+pruning is optional):
+- `migrate_legacy_links_table()` v1->v2 `url`/`app` ALTERs - std 741-784,
+  pro 1245-1288.
+- old `..._stored_links` row copy + `DROP TABLE` +
+  `delete_option( '..._stored_links_table_version' )` - std 691-723,
+  pro 1195-1227 (ran when 1.22.17 / 1.20.23 shipped).
+- `mi_take_legacy_positive()` transient back-compat (1.22.23 / 1.20.29) -
+  legacy positives had 12 h TTLs and expired long ago; the helper still
+  runs a presence test on every lookup.
+
+**Plan sketch:** confirm live-DB state first (no `{prefix}v4v_musiclink_stored_links`
+table, `..._cache_table_version` = 1, Pro `..._log_table_version` = '2',
+no legacy non-empty `mi_*_v4_*` transients); delete the three families
+above from both plugins; keep creation + version flags untouched (Pro's
+log dbDelta cannot be split - it is both create and alter-in-place); then
+a fresh-install smoke test (empty DB -> one CREATE, no warnings, no
+`SHOW COLUMNS` error on the absent legacy table).
+
+---
+
+## O18. New shortcode parameter accepting a direct fountain.fm link (both versions) - attribute only, never a URL query param
+
+**Status: Planned** (user picked this 2026-10-05; scope confirmed both
+versions and precedence decided the same day - implement only on request).
+
+**What:** a `fountain` attribute on BOTH shortcodes (`[musiclink]` and
+`[musiclink_pro]`) taking a pre-known direct link, e.g.
+`[musiclink album="..." track="..." fountain="https://fountain.fm/<segment>/<id>"]`,
+used as-is for that placement - no Server-Action resolve, no self-heal, no
+Cache-tab edit needed. **Decided 2026-10-05: the attribute OVERRIDES the
+cache row** for that placement; precedence is attribute -> cache row ->
+`fountain_resolve()`. (The original request said Pro only; scope widened to
+both versions 2026-10-05.)
+
+**Where (both; pro is the mirror):**
+- Attribute intake: `shortcode_atts( array( 'album', 'track', 'header' ) )`
+  std **1637-1641** / pro **3121-3125** - unknown keys are silently dropped
+  by `shortcode_atts`, so adding one is cheap, **but standard also has the
+  `$unexpected` whitelist at std 1636**: an attribute name not in its
+  `array( 'album', 'track', 'header' )` causes ALL attributes to be
+  ignored, so `fountain` must be added to both lists in std or the feature
+  silently never applies there.
+- Fountain block that consumes it: std **1727-1766** (`$fountain_url`
+  default 1728, cache-row hit 1737-1740, resolve 1750, `store_fountain_link()`
+  1764) / pro **3208-3248** (default 3210, resolve 3232, store 3246) -
+  the attribute check goes in front of the cache-row branch per the
+  precedence decision above.
+- Buttons render through `esc_url( $link['url'] )` std **2751** / pro **4483**.
+- Existing "give me a link by hand" mechanism is the Cache-tab inline
+  `fountain_url` edit (`handle_update_cache_row`) - global per release;
+  the new attribute is per placement and outranks it (decided).
+
+**Why not a URL query param (the user's abuse concern):** Pro is the only
+surface that reads the query string for content (`get_guid_arg()` 612-615,
+`$_GET['album']`/`$_GET['track']` feeding 3130-3135 for the shareable
+/musiclink page). If a `fountain` URL followed that pattern, **any
+visitor** could publish `?fountain=https://evil.example/phish` and the page
+would emit that as the button's href - reflected link injection, and with a
+full-page cache an attacker's URL can be frozen into cached HTML for every
+later visitor. The shortcode-attribute path is author-gated (post content
+needs `edit_posts`+), which is the same trust level already trusted with
+`album`/`track`/`header`. Recommendation baked into this item: **attribute
+only; no `$_GET` twin.** Standard can never grow this surface by accident -
+it has no URL-parameter mode at all (README:22) - so the rule binds Pro.
+If a URL-driven flavor is ever demanded, it needs
+the validation below plus an explicit sign-off that any visitor may set it.
+
+**Validation requirements (attribute value):** parse as URL; scheme must be
+`https`; host exactly `fountain.fm` or `*.fountain.fm` - the same trust rule
+the chunk scan already uses (std 2087-2090 / pro mirror); reject anything
+else (`javascript:`, `http:`, look-alike hosts, userinfo tricks like
+`fountain.fm@evil.tld`) by falling back to the normal cache-row/resolve
+path rather than rendering it; keep the 256-byte length cap pattern
+(`guard_guid()` std 1625 / pro 605-607) for consistency; output stays on
+the existing `esc_url()` line (std 2751 / pro 4483).
+
+**Open decisions:**
+1. Persistence: should a valid attribute value be written back via
+   `store_fountain_link()` (making one placement's override global) or stay
+   placement-local (recommended - a per-post attribute silently editing the
+   shared cache row would surprise the Cache tab).
+2. Does the confirm-first modal need to know about it? Today `isFallback`
+   matches only `discover`/`search?`/bare homepage, so a validated deep
+   link correctly does not intercept - confirm no change needed.
+
+**Plan sketch:** add `'fountain' => ''` to `shortcode_atts` in both
+plugins (std 1637 **and the std 1636 `$unexpected` whitelist** / pro 3121);
+new `fountain_direct_url_or_reject()` sanitizer per the rules above,
+mirrored; feed it into both Fountain blocks **ahead of the cache-row branch**
+(decided precedence: attribute -> cache row -> resolve); leave
+`fountain_resolve()` / self-heal / stored-links untouched for placements
+that don't supply it; unit-test the sanitizer as a host/scheme/length
+matrix plus render assertions per plugin (valid attr -> button href, attr
+outranks a conflicting cache row, invalid attr -> falls back, attribute
+never reaches `store_fountain_link()` unless open decision 1 says so);
+README usage sections for both versions gain the attribute.
+
+---
+
+## O19. Standard version: shortcode generator (page edit or plugin settings area)
+
+**Status: Planned** (user picked this 2026-10-05; implement only on request).
+
+**What:** a small builder in the RESOLVER (standard) plugin that assembles
+`[musiclink album="…" track="…" header="…"]` for copy-paste, instead of the
+admin hunting GUIDs and typing attributes by hand. The user named two
+possible homes - inside the page/post edit screen, or on the plugin's own
+Settings screen - placement is open decision 1.
+
+**Why:** the attribute contract has sharp edges hand-typing trips over:
+standard ignores **all** attributes if any name is unexpected (the
+`$unexpected` whitelist std **1636**), `guard_guid()` silently drops values
+over 256 bytes (std **1625**), and a missing `album` renders the usage
+message instead of the release (std `render()` 1646+). The GUIDs themselves
+already sit in the Cache tab (`Album GUID` column header std **1172**,
+row fields `album_guid`/`track_guid`) but must be copied across by hand
+today.
+
+**Sites (standard only, per request):**
+- Settings home: `add_options_page` / `render_settings_page()` std **216**
+  / **396** (tabs Settings + Cache) - a "Generate shortcode" box; plus an
+  optional per-row "copy shortcode" action on the Cache tab, which already
+  renders both GUIDs.
+- Page-edit home - no precedent in this plugin (zero editor code today):
+  block-editor sidebar via `enqueue_block_editor_assets`, classic-editor
+  Quicktags, or a media button.
+- Clipboard pattern to reuse: Pro's share button
+  (`v4v-musiclink-pro-share-btn`, pro **2908-2923** -
+  `navigator.clipboard.writeText()` with a transient "copied" label);
+  standard has no clipboard code yet.
+- The builder must emit only whitelisted attribute names (std 1636/1637)
+  and will gain `fountain` (O18) once that ships.
+
+**Open decisions:**
+1. Placement: Settings-screen box (cheapest - no editor dependency, no JS
+   on every edit screen) vs block-editor integration vs both.
+2. GUID source: free-text paste vs a picker fed from Cache-tab rows (which
+   exist only for releases resolved at least once) vs a Music Index search
+   box - search is Pro-only today (README:22: standard has no URL-parameter
+   or search-UI mode, just the usage message).
+3. Which attributes the builder exposes: `album`+`track` only, or also
+   `header`, and later `fountain` (O18).
+
+**Plan sketch:** settings-screen box first - two inputs (album GUID
+required, track optional), optional header toggle, live-assembled
+`[musiclink …]` output, copy button ported from the Pro share pattern,
+client-side hints for the 256-byte cap and unknown attribute names;
+optionally a "copy shortcode" action on Cache-tab rows reusing the GUID
+cells already in the row; harness assertions that the box renders fully
+escaped and that only whitelisted attribute names can appear in the
+emitted string; README usage line updated. Block-editor integration only
+if open decision 1 picks it.
 
 ---
 
