@@ -46,7 +46,7 @@ Shortcode: `[musiclink_pro]` (accepts the same `album`/`track`/`header` attribut
 | StableKraft.app | Formulaic GUID-based URL, no lookup required |
 | PodTunes.app | Formulaic GUID-based URL, no lookup required |
 | v4vmusic.com | Search by title (resolved from Music Index) — no public album/track pages exist |
-| Fountain.fm | Resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint; falls back to `https://fountain.fm/discover` on failure |
+| Fountain.fm | Resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint; on failure the button lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known |
 
 Under **Settings → V4V MusicLink** (standard) / **Settings → V4V MusicLink Pro** (Pro) each app can be individually disabled, given a custom icon URL, and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
 

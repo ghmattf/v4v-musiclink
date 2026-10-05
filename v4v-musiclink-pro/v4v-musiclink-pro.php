@@ -23,8 +23,8 @@
  *    automatically (see below) before falling back to a plain link, so
  *    manual re-capture is a fallback rather than a requirement. Nothing
  *    breaks if this is left unset from the start either - Fountain just
- *    always falls back to fountain.fm/discover until a value (manual or
- *    auto-detected) is available.
+ *    always falls back to a Fountain search for the release until a value
+ *    (manual or auto-detected) is available.
  * 2. Create a WordPress Page with the slug "musiclink" (Pages > Add New).
  *    Set the page content to just the shortcode: [musiclink_pro]
  * 3. Link to it as:
@@ -53,8 +53,8 @@
  *   files looking for a fresh next-action value (best-effort heuristic,
  *   throttled to once per 15 minutes), retries once with it, and - if
  *   that succeeds - saves it so future requests use it directly without
- *   repeating the crawl. Falls back to fountain.fm/discover if all of
- *   that fails too.
+ *   repeating the crawl. Falls back to a Fountain search for the release
+ *   (or fountain.fm/discover if no title is known) if all of that fails too.
  *
  * SOCIAL PREVIEWS: when the musiclink page (or any page containing the
  * [musiclink_pro] shortcode) is shared on social media, this plugin can add
@@ -2368,7 +2368,7 @@ class V4V_Music_Link_Resolver_Pro {
 							<p class="description">
 								<?php
 								esc_html_e(
-									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to fountain.fm/discover until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
+									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to a Fountain search for the release until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
 									'v4v-musiclink-pro'
 								);
 								?>
@@ -2869,9 +2869,11 @@ class V4V_Music_Link_Resolver_Pro {
 
 				fountainLink.addEventListener("click", function (e) {
 					var href = fountainLink.getAttribute("href");
-					// Unresolved fallback (fountain.fm/discover); the bare
-					// homepage stays matched for a link set by hand.
+					// Unresolved fallbacks: the generic discover page or
+					// the release search URL; the bare homepage stays
+					// matched for a link set by hand.
 					var isFallback = href === "https://fountain.fm/discover"
+						|| 0 === href.indexOf("https://fountain.fm/search?")
 						|| href === "https://fountain.fm" || href === "https://fountain.fm/";
 					if (isFallback) {
 						e.preventDefault();
@@ -3134,8 +3136,9 @@ JS;
 		// Their ONLY resolution mechanism is an unofficial, undocumented
 		// Next.js Server Action - fragile because its "next-action" build
 		// fingerprint changes whenever Fountain redeploys. We call it here,
-		// but cache successes for a long time and always fall back to
-		// fountain.fm/discover on any failure, so a stale/broken hash
+		// but cache successes for a long time and always fall back to a
+		// Fountain search for the release title (or fountain.fm/discover
+		// when no title is known) on any failure, so a stale/broken hash
 		// never breaks the button - it just stops being a direct link
 		// until the hash is refreshed (see FOUNTAIN_NEXT_ACTION below).
 		if ( $this->is_app_enabled( 'fountain' ) ) {
@@ -3171,11 +3174,23 @@ JS;
 						. '/'
 						. rawurlencode( $fountain_hit['id'] );
 
-					// Only a real deep link is ever stored: the
-					// fountain.fm/discover fallback above must never be
-					// persisted, or it would pin a generic Fountain link
-					// to this release forever.
+					// Only a real deep link is ever stored: neither
+					// fallback (fountain.fm/discover, or the release
+					// search URL below) may ever be persisted, or it
+					// would pin a generic Fountain link to this release
+					// forever.
 					$this->store_fountain_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
+				} elseif ( $fountain_search_text ) {
+					// Unresolved (or no cached link): hand the visitor
+					// Fountain's own search results for this release -
+					// the double quotes are Fountain's exact-phrase
+					// syntax - instead of the generic discover page. One
+					// click lands on results for the title we already
+					// have. Just as generic as discover, so the never-
+					// store rule above still applies; with no title to
+					// pre-fill the discover default set above stands.
+					$fountain_url = 'https://fountain.fm/search?q='
+						. urlencode( '"' . $fountain_search_text . '"' );
 				}
 			}
 
@@ -3651,7 +3666,8 @@ JS;
 	 * Both are definitive and keep FAIL_CACHE_TTL. Everything else -
 	 * transport failure, 5xx, redirect, or a 200 body we couldn't read -
 	 * is unconfirmed and gets SOFT_FAIL_CACHE_TTL, so one blip can't pin
-	 * the button to the fountain.fm/discover fallback for a full hour.
+	 * the button to the fallback (a Fountain search for the release) for a
+	 * full hour.
 	 */
 	private function fountain_negative_cache_ttl() {
 		return ( 200 === $this->last_fountain_status || 404 === $this->last_fountain_status )
@@ -3877,7 +3893,7 @@ JS;
 	 * The type therefore decides the prefix. Only when Fountain omits a
 	 * type we recognise do we fall back to the historic guess - whether
 	 * the shortcode supplied a track guid - which preserves the previous
-	 * behaviour rather than degrading to the fountain.fm/discover fallback.
+	 * behaviour rather than degrading to a generic fallback.
 	 *
 	 * @param array $hit      Resolution result from extract_fountain_hit().
 	 * @param bool  $has_track Whether the shortcode carried track data (fallback only).
