@@ -14,8 +14,8 @@ or **explicitly declined**. Implemented history is never here - it is in
 **Status key:** **Planned** = user picked it, plan below, implement only on
 request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 
-Line numbers below are as of 2026-10-01 (Resolver 1.22.20 / Pro 1.20.26);
-they will drift - re-locate by symbol name.
+Line numbers below predate Resolver 1.22.24 / Pro 1.20.30 (2026-10-05)
+unless a note says otherwise; they will drift - re-locate by symbol name.
 
 ---
 
@@ -57,11 +57,15 @@ flake/timeout; treat as informational and re-run once before concluding),
 `test_fountain_path.php`, plus the two live Fountain probes
 `fountain_candidate_test.php` / `fountain_case_test.php` (no assertion
 counter) and the browser e2e in `tmp/e2e/` (`gen_page.php`, `router.php` -
-captured HTML files in that dir are scratch). Baseline as of 2026-10-04
-(Resolver 1.22.23 / Pro 1.20.29): 14 files - the 11 offline harnesses are
-green (910 counted assertions) and `tmp/e2e/gen_page.php` self-checks pass;
-`fountain_live_test` is 0/20 until O11 is fixed, and the two live Fountain
-probes still print nothing per O9.
+captured HTML files in that dir are scratch). Baseline as of 2026-10-05
+(Resolver 1.22.24 / Pro 1.20.30): 14 files - the 11 offline harnesses are
+green (962 counted assertions) and `tmp/e2e/gen_page.php` self-checks pass;
+`fountain_live_test` is **20/20** again (O11 fixed), and the two live
+Fountain probes still print nothing per O9. The stale homepage-only port
+`tmp/fountain_probe.php` was retired the same day (its first-candidate
+logic no longer matched the plugin; `probe_sweep` / `probe_candidates` /
+`probe_window` / `probe_autodetect_trace` / `probe_woman` are the live
+diagnostics now).
 
 **Plan sketch:** create tracked `tests/`; `git mv` the ten harnesses plus
 `wpstub/` (same directory depth as `tmp/`, so their
@@ -87,7 +91,7 @@ ran, when, or with what result.
 
 **Plan sketch:** persist an attempt record - option
 `v4v_musiclink(_pro)_fountain_last_attempt` = timestamp + HTTP status -
-whenever `fountain_autodetect_next_action()` runs (standard ~line 1030,
+whenever `fountain_autodetect_next_actions()` runs (standard ~line 1030,
 Pro ~line 2756); render a read-only line next to the "next-action" field
 on each settings page (standard ~line 472, Pro ~line 1508): "Last attempt:
 2026-09-25 12:00 - status 404" or "never attempted". Both plugins. A
@@ -99,6 +103,30 @@ asks.
 ## O6. Fountain positive cache is keyed on the `next-action` hash, so a redeploy busts every saved link
 
 **Status: Planned** (user picked it 2026-09-26; implement only on request).
+
+**2026-10-04 note (from the O11 triage - read before implementing).** The
+line refs below predate the cache-table work; corrected now: the key is
+std `v4v-musiclink/v4v-musiclink.php:1889` (`set_transient` 1949),
+Pro `v4v-musiclink-pro/v4v-musiclink-pro.php:3611` (`set_transient` 3671);
+`fountain_try_resolve()` std 1884 / Pro 3606; `fountain_path_segment()`
+std 2165 / Pro 3887. Live evidence that the risk in "what" is real: on the
+user's site the ONLY working Fountain deep link is a positive keyed
+`md5(guid | current-option-value)` - it keeps rendering only because O11's
+broken self-heal has never managed to `update_option()` a new id, so the
+keys have stayed stable since before Fountain's redeploy; the day self-heal
+succeeds (or O11's fix persists a fresh id) every cached hit under the old
+value vanishes at once. Note also that O14, if shipped first, ignores these
+positives whenever a cache row is absent - coordinate the two.
+
+**2026-10-05 note (O11 shipped as Resolver 1.22.24 / Pro 1.20.30).** The
+warning above is now live rather than hypothetical: self-heal probes
+candidates and persists the first id that answers, so on the next render
+after a Fountain redeploy every stored `next_action` - and therefore every
+positive's key - changes in one step, and all 30-day hits keyed on the old
+value disappear at once (each release then re-resolves once and re-caches
+under the new key, so the outage is one render per release, not permanent).
+The key/`set_transient` line refs above also moved with the bump; re-locate
+by symbol as always.
 
 **What:** `fountain_try_resolve()` caches a successful resolution for 30
 days under `'fountain_id_v5_' . md5( $guid . '|' . $next_action )`
@@ -156,7 +184,7 @@ release after a redeploy - that is O7.
 
 **What:** why, once self-heal is required, the button takes far too long
 to start working again. Causes found this turn in `fountain_resolve()` /
-`fountain_autodetect_next_action()` (standard lines 874-902, 1029-1125;
+`fountain_autodetect_next_action(s)()` (standard lines 874-902, 1029-1125;
 Pro lines 2600-2630, 2755-2848), roughly ranked:
 
 1. Positive cache keyed on the hash - see O6 (also makes *whether*
@@ -171,24 +199,37 @@ Pro lines 2600-2630, 2755-2848), roughly ranked:
    proxy/PHP/client timeout kills it before `update_option()`, the work
    is discarded while the already-committed throttle transient blocks the
    next 15 minutes.
-4. `update_option()` only runs `if ( $result )` (standard ~line 893), so
-   a *fresh* hash whose readable payload lacks this guid is never
-   persisted - indistinguishable from "still stale" - producing a
-   detect/fail loop.
-5. Deterministic first-candidate short-circuit (standard ~line 1119):
-   if the first near-"search" hex isn't the right action, detection
-   returns the same wrong value forever until Fountain's chunk order
-   changes.
+4. ~~`update_option()` only runs `if ( $result )`, so a *fresh* hash whose
+   readable payload lacks this guid is never persisted - indistinguishable
+   from "still stale" - producing a detect/fail loop.~~ **Fixed 2026-10-05
+   (Resolver 1.22.24 / Pro 1.20.30):** a candidate that answers with a
+   readable hits payload is now persisted even when our guid is absent.
+5. ~~Deterministic first-candidate short-circuit: if the first
+   near-"search" hex isn't the right action, detection returns the same
+   wrong value forever until Fountain's chunk order changes.~~ **Fixed
+   2026-10-05 (Resolver 1.22.24 / Pro 1.20.30):** detection returns every
+   candidate (`fountain_autodetect_next_actions()`) and `fountain_resolve()`
+   probes them in order - this was O11, released today.
 6. Demand-driven only - no cron. Healing needs a render with a Fountain
    button that also passes the Music Index lookup (standard ~line 720
    returns early; MI "not found" is negative-cached for 1 hour), so on a
    quiet site attempts are naturally minutes-to-hours apart.
 7. Unverified: site page caching may keep serving plain/stale HTML past
    the plugin's own heal.
+8. **2026-10-05 observation (not a regression - baseline behaves the same):**
+   `last_fountain_hits_parsed` is reset at the top of `fountain_try_resolve()`,
+   so an answer served from the negative cache leaves it false. A release
+   Fountain does not index therefore stops the crawl on the render that
+   actually POSTed (the new "stored id is live, give up early" branch) but
+   re-enters self-heal once that miss is being served from cache - i.e. the
+   crawl can still repeat every 15 minutes for such releases. Making the
+   negative cache remember *whether* it was parsed (`''` vs a marker) would
+   close it; only worth it if the crawl cost ever matters.
 
-**Plan sketch (options identified, none picked):** validate-on-200 and
-persist regardless of our guid (1+4); return a candidate list tried in
-order until one yields a readable hits payload (5); arm the throttle
+**Plan sketch (options identified, none picked):** ~~validate-on-200 and
+persist regardless of our guid (1+4)~~ done 2026-10-05;
+~~return a candidate list tried in order until one yields a readable hits
+payload (5)~~ done 2026-10-05 (that was O11); arm the throttle
 after a completed attempt with a 30-60s backoff on failure, keeping 15
 minutes only after a conclusive scan (2); time-box the crawl and run it
 via `fastcgi_finish_request()`/`shutdown` so a page timeout can't eat the
@@ -225,13 +266,15 @@ those fixtures were captured against.
 
 **This is a stale fixture, not a plugin bug.** `tmp/fountain_live_test.php`
 autodetects the current next-action from the `/search-page` chunks exactly as
-the shipped `fountain_autodetect_next_action()` does, and it passed 20/20
+the shipped `fountain_autodetect_next_actions()` does, and it passed 20/20
 against the same endpoint in the same run - so the production search path is
 fine. Neither failing probe loads plugin code for its request either.
 
 **Plan sketch:** make the two probes detect rather than embed - reuse the
 chunk scan `fountain_live_test.php` already has (or call the plugin's
-`fountain_autodetect_next_action()` and feed its result into `next-action`);
+`fountain_autodetect_next_actions()` and feed one candidate from its list
+into the `next-action` header - since 1.22.24 / 1.20.30 it returns a list,
+and the plugin itself probes rather than trusts it);
 keep the bogus-token request `fountain_case_test.php` already makes as the
 deliberate stale-hash 404 assertion. Fold "the token must be detected, not
 captured" into O4's `tests/` move so the fixtures cannot rot silently again.
@@ -242,6 +285,14 @@ captured" into O4's `tests/` move so the fixtures cannot rot silently again.
 
 **Status: On hold** (user deferred 2026-09-26, after the unauthenticated
 probe below; no code changes made, re-open only on request).
+
+**2026-10-05 note:** nothing is blocked on O10 - the O11 fix shipped
+through the internal server-action path instead (probe every detected
+candidate instead of trusting the first, Resolver 1.22.24 / Pro 1.20.30),
+so the official API stays a "delete this whole redeploy-breaks-us class"
+option rather than a dependency. The one remaining unknown is unchanged:
+whether a real key returns album/track hits carrying `_guid` (one
+authenticated call).
 
 **What:** while reviewing the project against Fountain's Terms of Use
 (`https://fountain.fm/terms-of-use`, last updated 2026-09-16) it turned out
@@ -262,7 +313,7 @@ action** `https://fountain.fm/search` with a detected `next-action` hash,
 `Origin`/`Referer` of fountain.fm and a spoofed Chrome 151 User-Agent
 (`fountain_try_resolve()` standard ~1596, Pro ~3310), plus a self-heal crawl
 of 2 seed pages and up to ~40 `/_next/static/*.js` chunks to rediscover that
-hash (`fountain_autodetect_next_action()` standard ~1714, Pro ~3428).
+hash (`fountain_autodetect_next_actions()` standard ~1714, Pro ~3428).
 
 **Compliance read (not legal advice):** no clause of the ToS is plainly
 breached - §10 bans "disrupt[ing] or exploit[ing] the platform" but says
@@ -331,77 +382,6 @@ block later would be inconvenient to answer honestly).
 
 ---
 
-## O11. Fountain's latest redeploy reordered the `next-action` ids, so self-heal now persists the WRONG one and every Fountain button falls back
-
-**Status: Open** (identified 2026-10-01, awaiting triage).
-
-**Symptom.** `tmp/fountain_live_test.php` went from 20/20 green (2026-09-26)
-to **0/20**, reproduced on two consecutive runs (so not a network flake), for
-BOTH classes: `fountain_resolve()` returns no hit and the auto-detected
-`next-action` is never persisted (`... persisted via update_option(...)` ->
-`none`). The offline suite still looks healthy - 708 offline assertions pass,
-the 20 live ones do not - because those stub the HTTP layer, so this is
-invisible to the release gate. On the front end every Fountain button
-therefore renders the fallback link (the `https://fountain.fm/discover` link
-this turn's release switches to), which is the user-visible symptom.
-
-**Root cause (proven live 2026-10-01; repro script
-`/tmp/opencode/diag_scan.py`).** Fountain redeployed, and in the shared chunk
-`/_next/static/immutable/chunks/2fv5aivvlt_ba.js` the near-"search" hex ids
-came back in a new order:
-
-| candidate, in file order | `POST /search` with `["See Through",[]]` |
-|---|---|
-| `608818e35378be12b7e6c169407aa64d4cbffc6079` **(what the plugin picks)** | 200, 97 B, `{"content":[],"profiles":[]}` - no `hits` |
-| `6028cb7b546a83379b6f77849aa2391bd7481bbddb` | 200, ~16-25 KB, `1:{"hits":[...]}` carrying the right `_guid`s (track `cbdaeaa0…`, album `d5c805fb…`) and `_type` TRACK/ALBUM |
-| `4080494aa4b8eb5305e760d79786d38df872619dc8` | 200, 84 B, no `hits` |
-
-`fountain_autodetect_next_action()` (std ~1719 / Pro ~3433) deliberately
-returns the FIRST near-"search" hex and short-circuits, on the documented
-assumption that "the searchContent registration is declared before
-searchProfiles, so the first candidate is the right action" (docblock std
-~1701-1704). The redeploy broke that ordering assumption: self-heal keeps
-rediscovering the wrong action id, the retry produces no `hits` payload, so
-`fountain_resolve()` (std ~1564 / Pro ~3278) never calls `update_option()`
-and the state never recovers - the 15-minute throttle just repeats the same
-wrong answer.
-
-Everything else still works, verified live: the seed/delta scan order is
-intact (search-page delta = 3 chunks, scan total 23, and scan #1 is already
-the chunk holding all three ids), the endpoint/headers/body shape are valid,
-and `extract_fountain_hit()` parses the good candidate's response fine.
-
-**Plan sketch (pick one, or combine):**
-- **Probe candidates instead of trusting the first**: let autodetect return
-  ALL near-"search" candidates for a chunk and have `fountain_resolve()`
-  try them in order, persisting the first that yields a parseable `hits`
-  payload. Immune to any future reordering; costs one extra POST per
-  redeploy (<= ~4 candidates in the observed chunk).
-- **Or tighten selection**: accept a hex only when it sits next to the
-  `searchContent` identifier rather than merely within 300 chars of the
-  word "search" (the same chunk also carries `createServerReference` /
-  `registerServerReference`, verified live). Cheaper, but repeats if the
-  layout moves again.
-- Either way `tmp/fountain_fix_test.php` (104 assertions encoding
-  "first candidate wins" plus the D1-D4 scan-order matrix) and
-  `tmp/fountain_probe.php` (still homepage-only, stale vs the plugin's
-  /search-first order) need updating, then re-run
-  `tmp/fountain_live_test.php` expecting 20/20.
-- Until something is picked: buttons keep rendering the discover fallback,
-  which is the mitigation this turn ships.
-
-**Re-confirmed 2026-10-04** (release run for Resolver 1.22.21 / Pro 1.20.27):
-`tmp/fountain_live_test.php` is still 0/20 on two runs; `fountain_resolve()`
-returns NULL after a full autodetect+POST cycle (~6s), and the plugin's scan
-now picks `6089300ccac831e642ad43ebadccbc79cc5798cebe` — a rotated id, same
-chunk, same "first candidate wins" failure. The two probe fixtures (O9)
-still 404 with `Server action not found.`, and a bare
-`POST https://fountain.fm/search` with no/unknown action now answers 405 or
-404 rather than 200. The 11 offline harnesses are green; this remains the
-one live breakage, still untriaged as a fix.
-
----
-
 ## O13. "Flush Music Index data" action on the Cache tab
 
 **Status: On hold** (user deferred 2026-10-03 - declined as part of the
@@ -426,6 +406,59 @@ reports the affected row count. Both plugins, full rename applied.
 
 ---
 
+## O14. No matching cache row → ignore transient TTLs and refresh live
+
+**Status: Planned** (user requested 2026-10-04; they asked for the design
+answer first - implement only on their go-ahead. Ordering is now settled:
+O11 shipped first, on 2026-10-05, so O14 may follow whenever they pick it).
+
+**What:** when `cache_get_row()` returns nothing for the pair, stop
+consulting the transient caches and go straight to the live lookup, so a
+Clear on the Cache tab means "every release re-resolves now" rather than
+"delete the rows and hope".
+
+**Why (the user's hit, 2026-10-04):** Clear removes rows only - the
+transients outlive it - so after clearing every row on the site the page
+still rendered a deep Fountain link from the 30-day hit transient, and
+the tab showed no row for it. Same class of gap for MI: a remembered miss
+stops the fetch for up to `FAIL_CACHE_TTL`.
+
+**Sites (std; pro is the mirror at 1373 / 3606 / 3924 / 3947 / 3975 /
+3996 / 4028 / 4139):**
+- MI: `mi_get_feed()` 2199, `mi_get_track()` 2222 -> `mi_fetch_and_record()`
+  2253 -> `mi_fetch_feed()` 2274 / `mi_fetch_track()` 2306. Skip
+  `mi_take_legacy_positive()` (2416) and the `get_transient( $negative_key )`
+  check (2285 / 2316) when the caller had no row.
+- Fountain: `get_cached_fountain_url()` 869 -> `fountain_try_resolve()`
+  1884. Skip the `fountain_id_v5_*` read (positive AND, if the strict
+  version is chosen, the negative) when there is no row.
+- Background refreshes of rows that DO exist (`queue_mi_refresh()` /
+  `run_queued_mi_refresh()`) keep honouring negatives - that is not the
+  no-row case.
+
+**Open decision:** are remembered *failures* ignored too? TTLs are
+`FAIL_CACHE_TTL` = 1 h and `SOFT_FAIL_CACHE_TTL` = 30 s
+(`negative_cache_ttl()` 2596, `fountain_negative_cache_ttl()` 1970).
+Recommendation put to the user: ignore positives only, keep honouring
+failures - otherwise an outage turns every view of every row-less release
+into blocking API calls plus a Fountain POST per view, on the unofficial
+endpoint we are already careful with.
+
+**Ordering warning (resolved 2026-10-05):** this originally said to do
+O11 first, because ignoring the 30-day Fountain hit while self-heal was
+broken would have turned the user's one working deep link into
+`fountain.fm/discover` with nothing able to re-resolve it. O11 shipped as
+Resolver 1.22.24 / Pro 1.20.30, so that hazard is gone and O14 no longer
+has to wait on anything.
+
+**Plan sketch:** thread a "no row" flag from `mi_get_*()` /
+`get_cached_fountain_url()` into the fetch/resolve helpers; both plugins
+(identical after `_pro` normalization); extend `tmp/test_stored_links.php`
+with: no row + remembered MI miss => live fetch runs; no row + cached
+Fountain hit => POST attempted; row present => both still honoured.
+
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **Fountain self-heal stays inline** (security review finding #5):
@@ -444,3 +477,10 @@ reports the affected row count. Both plugins, full rename applied.
   (offered as O10 options 2026-09-26): declined that day - user chose to
   stop after the unauthenticated probe. O10 carries the recorded probe data;
   re-propose only on request.
+- **O11 fix approach** (settled 2026-10-05): probe every detected
+  `next-action` candidate rather than tighten the near-"search" heuristic,
+  and skip O10's official API (Step 0) because O10 needs a paid key and is
+  On hold - shipped as Resolver 1.22.24 / Pro 1.20.30 with a two-phase
+  chunk walk (search-only delta in full, homepage's first 20 only when the
+  delta is empty) so the crawl keeps its pre-fix cost. Re-propose neither
+  the heuristic-only variant nor a full-window walk.
