@@ -732,24 +732,58 @@ README usage sections for both versions gain the attribute.
 
 ---
 
-## O19. Standard version: shortcode generator (page edit or plugin settings area)
+## O19. Standard version: shortcode generator with Music Index search (page edit or plugin settings area)
 
-**Status: Planned** (user picked this 2026-10-05; implement only on request).
+**Status: Planned** (user picked this 2026-10-05 and added the search +
+cache-write requirements the same day; implement only on request).
 
-**What:** a small builder in the RESOLVER (standard) plugin that assembles
-`[musiclink album="…" track="…" header="…"]` for copy-paste, instead of the
-admin hunting GUIDs and typing attributes by hand. The user named two
-possible homes - inside the page/post edit screen, or on the plugin's own
-Settings screen - placement is open decision 1.
+**What:** a builder in the RESOLVER (standard) plugin that assembles
+`[musiclink album="…" track="…" header="…"]` for copy-paste, fed by a
+Music Index search box: the admin types **title text**, results come back
+from `https://api.musicindex.org/v1/search` (guids, resolved to display
+text), and picking a hit supplies the shortcode's guid attributes.
+**Decided 2026-10-05: picking a result also populates the cached links** -
+the chosen release is upserted into `{prefix}v4v_musiclink_cache` so the
+Cache tab shows it immediately (titles/artist/art stamped;
+`fountain_url` stays `''`, which by existing cache-row semantics makes the
+first render run the Fountain search - unchanged behaviour). The user
+named two possible homes - page/post edit or the plugin's Settings screen
+- placement is open decision 1.
 
 **Why:** the attribute contract has sharp edges hand-typing trips over:
 standard ignores **all** attributes if any name is unexpected (the
 `$unexpected` whitelist std **1636**), `guard_guid()` silently drops values
 over 256 bytes (std **1625**), and a missing `album` renders the usage
-message instead of the release (std `render()` 1646+). The GUIDs themselves
-already sit in the Cache tab (`Album GUID` column header std **1172**,
-row fields `album_guid`/`track_guid`) but must be copied across by hand
-today.
+message instead of the release (std `render()` 1646+). The GUIDs already
+sit in the Cache tab (`Album GUID` column header std **1172**, row fields
+`album_guid`/`track_guid`) but only for releases resolved at least once,
+and must be copied across by hand; searching by title removes both the
+GUID hunt and the chicken-and-egg.
+
+**Search - port from Pro, admin-side:** standard already has
+`MI_ROOT`/`MI_API_BASE` (std **101-102**) and `mi_api_get()` (std **2676**)
+but no search machinery at all. The Pro pieces to port: `mi_search_hits()`
+(pro **3354-3416** - cursor batches of `/search?q=&limit=`, per-query
+transient, dedupe, relevance order preserved), `ajax_search()` (pro
+**3468+**; its docblock records that *"search results only contain guids,
+not display text"*, so each hit is resolved via `mi_get_track()`/
+`mi_get_feed()` into `album_guid`/`track_guid` + title/subtitle),
+`search_hit_key()` (pro **3324**), the `SEARCH_*` constants (pro **217-221**;
+standard has none), the nonce (pro **2582**), and the box UI pattern from
+`render_search_ui()` (pro **3289**). Differences for the generator:
+- **Admin-only endpoint** - `wp_ajax_v4v_musiclink_search` with **no
+  `nopriv` twin**, gated by `current_user_can( 'manage_options' )` +
+  nonce. Pro's relay needs a per-IP rate limit precisely because its
+  nonces print on public pages; the generator's never do.
+- **No front-end search mode** - README:22 stays true; standard's
+  visitor-facing behaviour remains the usage message. This search exists
+  only in the admin builder.
+
+**Cache write - reuse, don't reinvent:** `mi_store_mi_fields()` std
+**2411-2437** is the existing `INSERT … ON DUPLICATE KEY UPDATE` upsert
+keyed by `cache_row_hash()`, stamping titles/artist/art + `mi_updated_at`
+and invalidating `row_memo`; the chosen hit's detail payload feeds it
+directly (kind `track` or `feed`). No Fountain work happens at choice time.
 
 **Sites (standard only, per request):**
 - Settings home: `add_options_page` / `render_settings_page()` std **216**
@@ -769,22 +803,22 @@ today.
 **Open decisions:**
 1. Placement: Settings-screen box (cheapest - no editor dependency, no JS
    on every edit screen) vs block-editor integration vs both.
-2. GUID source: free-text paste vs a picker fed from Cache-tab rows (which
-   exist only for releases resolved at least once) vs a Music Index search
-   box - search is Pro-only today (README:22: standard has no URL-parameter
-   or search-UI mode, just the usage message).
-3. Which attributes the builder exposes: `album`+`track` only, or also
+2. Which attributes the builder exposes: `album`+`track` only, or also
    `header`, and later `fountain` (O18).
 
-**Plan sketch:** settings-screen box first - two inputs (album GUID
-required, track optional), optional header toggle, live-assembled
-`[musiclink …]` output, copy button ported from the Pro share pattern,
-client-side hints for the 256-byte cap and unknown attribute names;
-optionally a "copy shortcode" action on Cache-tab rows reusing the GUID
-cells already in the row; harness assertions that the box renders fully
-escaped and that only whitelisted attribute names can appear in the
-emitted string; README usage line updated. Block-editor integration only
-if open decision 1 picks it.
+**Plan sketch:** settings-screen box first - a title-text search input
+(query → admin AJAX → proxied `mi_search_hits()` results as
+guid + title/subtitle rows), a chosen row fills the builder's guid fields
+**and upserts the cache row via `mi_store_mi_fields()`**, optional header
+toggle, live-assembled `[musiclink …]` output, copy button ported from the
+Pro share pattern, client-side hints for the 256-byte cap and unknown
+attribute names; optionally a "copy shortcode" action on Cache-tab rows
+reusing the GUID cells already in the row; harness assertions that the box
+renders fully escaped, only whitelisted attribute names can appear in the
+emitted string, the AJAX handler rejects unauthenticated/cross-site calls,
+and a chosen result lands as a cache row with `fountain_url = ''`; README
+usage line updated. Block-editor integration only if open decision 1
+picks it.
 
 ---
 
