@@ -234,6 +234,11 @@ class V4V_Music_Link_Resolver {
 			'sanitize_callback' => 'rest_sanitize_boolean',
 			'default'           => true,
 		) );
+		register_setting( 'v4v_musiclink', 'v4v_musiclink_random_app_order', array(
+			'type'              => 'boolean',
+			'sanitize_callback' => 'rest_sanitize_boolean',
+			'default'           => false,
+		) );
 		register_setting( 'v4v_musiclink', 'v4v_musiclink_apps', array(
 			'type'              => 'array',
 			'sanitize_callback' => array( $this, 'sanitize_apps_settings' ),
@@ -584,6 +589,27 @@ class V4V_Music_Link_Resolver {
 								v4vRenumberApps();
 							})();
 							</script>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">
+							<label for="v4v_musiclink_random_app_order"><?php esc_html_e( 'Random order', 'v4v-musiclink' ); ?></label>
+						</th>
+						<td>
+							<input type="hidden" name="v4v_musiclink_random_app_order" value="0" />
+							<input
+								type="checkbox"
+								id="v4v_musiclink_random_app_order"
+								name="v4v_musiclink_random_app_order"
+								value="1"
+								<?php checked( get_option( 'v4v_musiclink_random_app_order', false ) ); ?>
+							/>
+							<label for="v4v_musiclink_random_app_order">
+								<?php esc_html_e( 'Shuffle the music app buttons into a new random order on every page load', 'v4v-musiclink' ); ?>
+							</label>
+							<p class="description">
+								<?php esc_html_e( 'The "Order" column above is never changed by this: it stays the fixed order shown in the table, and is used whenever this box is unticked. When ticked, every load of a page containing the shortcode - including refreshes, and pages served from a cache - shows the buttons in a fresh random order. Without JavaScript the configured order is shown. The same randomisation applies to every visitor.', 'v4v-musiclink' ); ?>
+							</p>
 						</td>
 					</tr>
 					<tr>
@@ -2596,8 +2622,10 @@ JS;
 			<p class="v4v-musiclink-heading"><?php echo esc_html( $heading ); ?></p>
 			<?php if ( empty( $links ) ) : ?>
 				<p class="v4v-musiclink-error"><?php esc_html_e( 'No music apps are currently enabled - check Settings > V4V MusicLink.', 'v4v-musiclink' ); ?></p>
-			<?php else : ?>
-				<ul class="v4v-musiclink-list">
+			<?php else :
+				$random_order = (bool) get_option( 'v4v_musiclink_random_app_order', false ) && count( $links ) > 1;
+			?>
+				<ul class="v4v-musiclink-list"<?php echo $random_order ? ' data-v4v-shuffle="1"' : ''; ?>>
 					<?php foreach ( $links as $slug => $link ) : ?>
 						<li class="v4v-musiclink-item v4v-musiclink-<?php echo esc_attr( $slug ); ?>">
 							<a href="<?php echo esc_url( $link['url'] ); ?>" target="_blank" rel="noopener noreferrer">
@@ -2614,6 +2642,27 @@ JS;
 						</li>
 					<?php endforeach; ?>
 				</ul>
+				<?php if ( $random_order ) : ?>
+					<script>
+					(function () {
+						var lists = document.querySelectorAll( '[data-v4v-shuffle="1"]' );
+						for ( var i = 0; i < lists.length; i++ ) {
+							var ul = lists[ i ];
+							var items = Array.prototype.slice.call( ul.children );
+							for ( var j = items.length - 1; j > 0; j-- ) {
+								var k = Math.floor( Math.random() * ( j + 1 ) );
+								var tmp = items[ j ];
+								items[ j ] = items[ k ];
+								items[ k ] = tmp;
+							}
+							for ( var n = 0; n < items.length; n++ ) {
+								ul.appendChild( items[ n ] );
+							}
+							ul.setAttribute( 'data-v4v-shuffle', '0' );
+						}
+					})();
+					</script>
+				<?php endif; ?>
 			<?php endif; ?>
 
 			<p class="v4v-musiclink-footer">

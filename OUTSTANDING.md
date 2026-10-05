@@ -478,62 +478,81 @@ leave them (diagnostics, not gates).
 
 ---
 
-## O16. Random music app button order
+## O16. Random music app button order (settings tickbox, fresh order on every page load)
 
-**Status: Open** (planned 2026-10-05, moved to Open by user the same day).
+**Status: Planned** (user specified the design 2026-10-05 and sharpened it
+the same day: a tickbox in the Music Apps area of settings, BOTH plugins;
+enabled = a REFRESHED/re-rendered page shows a NEW random order every
+time; the settings order is never changed. Implemented the same day,
+uncommitted - remove this item when the release ships).
 
-**What:** an opt-in mode that shuffles the front-end order of the app
-buttons (YouTube / Spotify / Fountain / Stablekraft / ...) instead of
-always showing the admin-configured fixed order. Presumed rationale: equal
-exposure for every app rather than burying whatever sits last in the
-Order column.
+**What:** opt-in boolean setting. Off (default) => output byte-identical
+to today's admin-configured order, no script. On => every page load
+(including refreshes, and including pages served from a full-page cache)
+shuffles the buttons into a fresh order. The Order column, its arrows and
+the saved `..._apps[slug][order]` values are never touched.
 
-**Where (std; pro is the mirror):**
-- Front end: `[musiclink]` -> `render()` (registered 201; pro
-  `[musiclink_pro]` 271) assembles `$links`, then orders it via
-  `sort_links_by_app_order()` called std **1777** / pro **3259**; the helper
-  is defined std **373-385** / pro **2163-2175** and walks
-  `ordered_app_registry()` (std **349** / pro **2139**), which reads the
-  admin option `v4v_musiclink_apps[slug][order]`.
-- Admin side: the Order column + arrow buttons live in
-  `render_settings_page()` (row loop std ~465, position JS std 562-563,
-  help text std 521 "Use the arrows in the Order column ..."), saved by
-  `sanitize_apps_settings()` std **297** / pro **2087**, registered std
-  **236** / pro **1954**. That feature shipped as "Admin-configurable
-  Music apps order" (CHANGELOG ~line 305 area for Pro; same for Resolver).
-- **Do not** shuffle `ordered_app_registry()` itself - it feeds the admin
-  table, so randomization belongs only in the assembled front-end `$links`.
-  Launch logging (keyed by app slug) and the stored-links tooling are
-  order-agnostic and untouched.
+**Why client-side:** the live site is page-cached (cf. O18 - query params
+are "frozen by page cache"), so a server-side-only `shuffle()` would be
+generated once per cache entry and a refresh would keep showing the SAME
+order. The shuffle therefore runs in the browser, on each load.
 
-**Open decisions:**
-1. *Reshuffle scope*: every render, per post, or per day - and should all
-   `[musiclink]` blocks on one page agree? Independent `shuffle()` gives
-   each block its own order; a seeded RNG
-   (`mt_srand( crc32( get_the_ID() . $period ) )`) makes one post stable
-   within its window while still varying across posts/time.
-2. *Page-cache interaction*: a full-page cache freezes whatever order was
-   generated until the next purge, so server-side shuffling means "random
-   per cache generation", not per view. Server-side is still the
-   recommendation (no CLS, no DOM reordering); true per-view would need a
-   client-side shuffle, which reorders tab order and can jump layout.
-   Whichever is chosen has to be said plainly in the help text.
-3. *Setting shape*: a single new option (e.g.
-   `v4v_musiclink_button_order` = `fixed` | `random`, default `fixed`)
-   registered next to the others with a control above/below the apps
-   table, versus a per-app flag - per-app looks like the wrong granularity.
+**Setting:** `v4v_musiclink_random_app_order` /
+`v4v_musiclink_pro_random_app_order`, registered with the existing
+options (std `register_settings()` ~226 / pro ~1844) using the codebase's
+boolean pattern: `type => boolean`, `sanitize_callback =>
+rest_sanitize_boolean`, `default => false` (same as `..._show_header`).
 
-**Plan sketch:** register + sanitize the new option; add a small
-`maybe_shuffle_links()` step where `sort_links_by_app_order()` is called
-(std 1777 / pro 3259) so the base order still comes from the admin arrows
-and `fixed` reproduces today's output byte-for-byte; leave the admin UI,
-stored links and logging alone; new harness assertions (default mode
-unchanged, random mode returns a permutation of the same enabled slugs,
-seeded mode repeats within its window); both plugins; settings help text
-for the cache caveat. No current harness pins the front-end button order
-(`test_stored_links` asserts admin *column* order; `e2e/gen_page` the
-script stack), so nothing existing should break - but a regression
-assertion for the default mode should be added alongside.
+**Settings UI:** one new `<tr>` in the Settings tab directly after the
+"Music apps" row (std `render_settings_page()` row at ~466, pro ~2193),
+th label "Random order": hidden `value="0"` input + tickbox `value="1"` +
+`checked()` - the pattern Pro's "Log interactions" field uses (pro
+~2357), which avoids the unchecked-checkbox POST problem. Description
+text: shuffles the rendered buttons only (the table's Order column stays
+as configured); a new order on every page load and refresh, even when
+the page comes from a cache; without JavaScript the configured order is
+shown.
+
+**Mechanism:** server output is UNCHANGED - `render_html()` still emits
+the list in admin order (std `<ul class="v4v-musiclink-list">`, pro
+`<ul class="v4v-musiclink-pro-list">`). When the option is on AND there
+is more than one button:
+- the `<ul>` gets `data-v4v-shuffle="1"`, and
+- a tiny inline `<script>` is emitted immediately after the list: an IIFE
+  that queries `[data-v4v-shuffle]`, Fisher-Yates shuffles each list's
+  children, re-appends the same nodes, and sets the flag to `"0"` so a
+  second shortcode's copy of the script doesn't re-shuffle lists already
+  handled. Same nodes are moved, so `data-app` attributes and any Pro
+  beacon listeners survive untouched (logging is slug-keyed and
+  order-agnostic); runs during parse, before the rest paints, so no
+  visible layout shift.
+- Option off, or 0-1 buttons => no attribute, no script (byte-for-byte
+  today's markup).
+- No JS / JS blocked => configured order (graceful fallback).
+
+**Tests:** extend `tmp/test_stored_links.php` (loads BOTH classes and
+renders both settings pages + shortcode output):
+(a) the tickbox renders in both settings pages with the right name and
+help text;
+(b) regression guard (option absent AND option on): the server-emitted
+list order equals the configured admin order - no harness pins
+front-end order today;
+(c) option on with >=3 formulaic apps enabled => `data-v4v-shuffle="1"`
+present on the `<ul>` and the inline script contains the shuffle routine
+(marker + selector), and contains no `</script>` string;
+(d) option off => no `data-v4v-shuffle` and no shuffle script anywhere in
+the output;
+(e) settings table row order unchanged with option on.
+`tmp/e2e/gen_page.php` (option off in its fixture) must stay green
+unchanged. README has no app-order section; CHANGELOG entries at
+release.
+
+**Rejected/absent:** no server-side shuffle (frozen by page cache, and
+redundant once the browser re-rolls), no per-post/per-day seeding, no
+shortcode attribute override, no per-app flag.
+
+**Release:** ships via the normal flow (bump/changelog/tag); remove this
+item then.
 
 ---
 
