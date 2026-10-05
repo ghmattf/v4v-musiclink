@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.29
+ * Version: 1.20.30
  * Author: Matt Finlay
  *
  * USAGE:
@@ -2575,7 +2575,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.29', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.30', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -3577,19 +3577,43 @@ JS;
 			if ( $result ) {
 				return $result;
 			}
+			if ( $this->last_fountain_hits_parsed ) {
+				// The stored id answered with a readable hits payload that
+				// simply doesn't contain this guid: the action works and
+				// Fountain just doesn't know the release, so there is nothing
+				// for self-heal to fix - don't crawl for a new id every 15
+				// minutes on a release that can never resolve.
+				return null;
+			}
 		}
 
-		// No configured value, or the configured one just failed (most
-		// likely a stale "next-action" after a Fountain redeploy). Try to
-		// self-heal: detect a fresh value in the background and retry once
-		// with it. If that succeeds, persist it so future requests use it
-		// directly without needing to re-detect every time.
-		$detected = $this->fountain_autodetect_next_action();
-		if ( $detected && $detected !== $next_action ) {
-			$result = $this->fountain_try_resolve( $guid, $search_text, $detected );
+		// No stored value, or the stored one is dead (Fountain rotates these
+		// ids on every deploy, and a redeploy can leave several of them side
+		// by side in the same chunk where only one still works). Probe the
+		// detected candidates in scan order and persist the FIRST one that
+		// actually answers with a hits payload - never a silent, 404 or
+		// unparsable one, or a freshly discovered dead id would be pinned as
+		// the stored value and self-heal would re-derive it forever. A miss
+		// cached for candidate #1 does not block candidate #2: those caches
+		// are keyed per id (see fountain_try_resolve()).
+		foreach ( $this->fountain_autodetect_next_actions() as $candidate ) {
+			if ( $candidate === $next_action ) {
+				continue; // Already tried (and failed) above - don't repeat it.
+			}
+
+			$result = $this->fountain_try_resolve( $guid, $search_text, $candidate );
 			if ( $result ) {
-				update_option( 'v4v_musiclink_pro_fountain_next_action', $detected );
+				update_option( 'v4v_musiclink_pro_fountain_next_action', $candidate );
 				return $result;
+			}
+
+			if ( $this->last_fountain_hits_parsed ) {
+				// Live, readable "no match": this id IS a working search
+				// action (the release just isn't in Fountain's index), so
+				// store it - otherwise the option keeps pointing at a dead id
+				// and every later release repeats this whole crawl.
+				update_option( 'v4v_musiclink_pro_fountain_next_action', $candidate );
+				return null;
 			}
 		}
 
@@ -3602,8 +3626,16 @@ JS;
 	 * pair, so a stale cached failure never survives a next-action change;
 	 * how long a miss is remembered depends on how trustworthy it was
 	 * (see fountain_negative_cache_ttl()).
+	 *
+	 * last_fountain_hits_parsed is reset up front so it always describes
+	 * THIS attempt: anything that short-circuits before the body is parsed
+	 * (a cached miss, a 404, a transport error) leaves it false, which is
+	 * what lets fountain_resolve() tell "this id is alive and simply has no
+	 * match" from "this id is dead" while probing several candidates.
 	 */
 	private function fountain_try_resolve( $guid, $search_text, $next_action ) {
+		$this->last_fountain_hits_parsed = false;
+
 		// v5: the cached value is now the whole hit (id + _type), not just
 		// the id, so the old v4 entries - which carry no type and would
 		// otherwise survive for up to 30 days - are deliberately left
@@ -3697,23 +3729,38 @@ JS;
 
 	/**
 	 * Best-effort background attempt to discover Fountain's current
-	 * "next-action" Server Action ID by fetching Fountain's search page
+	 * "next-action" Server Action IDs by fetching Fountain's search page
 	 * AND its homepage, finding same-origin JS chunk URLs, and searching
-	 * each for a 40-44 character hex string appearing near the word
+	 * each for 40-44 character hex strings appearing near the word
 	 * "search" (a plausibility filter - minifiers preserve string
-	 * literals but mangle variable/function names). Returns the FIRST
-	 * candidate found, short-circuiting rather than exhaustively
-	 * scanning every chunk, since live testing found the first result
-	 * tends to be the correct one (in the live search chunk the
-	 * searchContent registration is declared before searchProfiles, so
-	 * the first candidate is the right action).
+	 * literals but mangle variable/function names).
+	 *
+	 * Returns EVERY candidate the walk below finds as an ordered,
+	 * de-duplicated list (chunk order, then file order within a chunk), or
+	 * an empty list when nothing was found or the run is throttled.
+	 * Fountain publishes several near-"search" ids at once - typically an
+	 * older or unrelated action listed first - and rotates them on every
+	 * deploy, so a single "first one wins" pick is exactly how a dead id
+	 * got stored and re-derived forever (O11). The caller probes the list
+	 * in order instead; this function only gathers, and never decides
+	 * which id is live.
+	 *
+	 * The walk is two phases so a self-heal stays as cheap as it was
+	 * before O11: phase 1 is the chunks ONLY the search page references
+	 * (a handful - that is where the registration lives), walked in full;
+	 * phase 2, the homepage's historic first 20, is fallback coverage for
+	 * a layout Fountain has not used since 2026 and is only walked when
+	 * phase 1 found nothing. Walking phase 2 regardless - it holds the
+	 * big framework chunks - would add tens of downloads and megabytes to
+	 * a crawl that runs inline in a visitor's page render.
 	 *
 	 * The search page leads because that is where the registration now
 	 * lives: searchContent is bound from chunks ONLY /search references
 	 * (verified live in 2026 - there are zero near-"search" candidates
 	 * anywhere in the homepage's own chunks), so a homepage-only crawl
-	 * can no longer self-heal anything. The homepage stays in the seed
-	 * list as fallback coverage in case Fountain moves it back.
+	 * can no longer self-heal anything. If Fountain moved the registration
+	 * back into a chunk both pages share, phase 1 would come up empty and
+	 * phase 2 would pick it up.
 	 *
 	 * Throttled to at most once per 15 minutes (regardless of outcome) so
 	 * a broken detection mechanism doesn't repeatedly hammer fountain.fm
@@ -3721,10 +3768,10 @@ JS;
 	 * via update_option() in fountain_resolve() above, so this path is
 	 * only ever hit again if something's still wrong after that.
 	 */
-	private function fountain_autodetect_next_action() {
+	private function fountain_autodetect_next_actions() {
 		$throttle_key = 'fountain_autodetect_throttle_pro';
 		if ( get_transient( $throttle_key ) ) {
-			return null;
+			return array();
 		}
 		set_transient( $throttle_key, true, 15 * MINUTE_IN_SECONDS );
 
@@ -3771,28 +3818,47 @@ JS;
 			$seed_scripts[ $seed_url ] = array_values( array_unique( $found ) );
 		}
 		if ( ! $seed_scripts ) {
-			return null;
+			return array();
 		}
 
-		// Scan order: chunks the search page references and the homepage
-		// does NOT first - that delta is where the action registration
-		// lives now - then the homepage's historic first 20 as fallback
-		// (both caps keep a chunk-storm from turning this into a
-		// full-site crawl; the 15-minute throttle bounds it anyway). A
-		// failed seed just contributes an empty list, so either page
-		// alone still yields a sane scan (homepage-only exactly matches
-		// the pre-2026 behaviour as a floor).
+		// Phase 1: chunks the search page references and the homepage does
+		// NOT - that delta is where the action registration lives now.
+		// Phase 2: the homepage's historic first 20 as fallback only, and
+		// only when phase 1 turned up nothing (see the docblock) - so a
+		// routine self-heal downloads the handful of delta chunks and
+		// stops instead of re-walking the homepage's big framework bundles.
+		// Both caps keep a chunk-storm from turning this into a full-site
+		// crawl; the 15-minute throttle bounds it anyway. A failed seed
+		// just contributes an empty list, so either page alone still
+		// yields a sane scan (homepage-only exactly matches the pre-2026
+		// behaviour as a floor).
 		$search_scripts = isset( $seed_scripts['https://fountain.fm/search'] )
 			? $seed_scripts['https://fountain.fm/search']
 			: array();
 		$home_scripts   = isset( $seed_scripts['https://fountain.fm/'] )
 			? $seed_scripts['https://fountain.fm/']
 			: array();
-		$script_urls = array_merge(
-			array_slice( array_values( array_diff( $search_scripts, $home_scripts ) ), 0, 20 ),
-			array_slice( $home_scripts, 0, 20 )
+
+		$candidates = $this->fountain_scan_chunks_for_actions(
+			array_slice( array_values( array_diff( $search_scripts, $home_scripts ) ), 0, 20 )
 		);
 
+		if ( ! $candidates ) {
+			$candidates = $this->fountain_scan_chunks_for_actions( array_slice( $home_scripts, 0, 20 ) );
+		}
+
+		return $candidates;
+	}
+
+	/**
+	 * Walks JS chunk URLs in order and returns every near-"search" hex id
+	 * they carry as an ordered, de-duplicated list (a hex seen in two
+	 * chunks is listed once, at its first position). A chunk that fails to
+	 * fetch simply contributes nothing - one missing chunk must not abort
+	 * the walk.
+	 */
+	private function fountain_scan_chunks_for_actions( $script_urls ) {
+		$candidates = array(); // Keyed by hex => order-preserving de-duplication.
 		foreach ( $script_urls as $script_url ) {
 			$response = wp_remote_get( $script_url, array(
 				'timeout'     => 8,
@@ -3811,12 +3877,12 @@ JS;
 				$offset = $hex_match[1];
 				$window = substr( $js, max( 0, $offset - 300 ), 600 );
 				if ( false !== stripos( $window, 'search' ) ) {
-					return $hex; // First candidate found - short-circuit.
+					$candidates[ $hex ] = true;
 				}
 			}
 		}
 
-		return null;
+		return array_keys( $candidates );
 	}
 
 	/**
