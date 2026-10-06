@@ -492,10 +492,11 @@ README usage sections for both versions gain the attribute.
 
 ---
 
-## O19. Standard version: shortcode generator with Music Index search (page edit or plugin settings area)
+## O19. Standard version: shortcode generator with Music Index search (block-editor sidebar)
 
-**Status: Planned** (user picked this 2026-10-05 and added the search +
-cache-write requirements the same day; implement only on request).
+**Status: Planned** (user picked this 2026-10-05 with the search +
+cache-write requirements; placement and header-control decisions added
+the same day - see Decisions below; implement only on request).
 
 **What:** a builder in the RESOLVER (standard) plugin that assembles
 `[musiclink album="…" track="…" header="…"]` for copy-paste, fed by a
@@ -546,13 +547,14 @@ and invalidating `row_memo`; the chosen hit's detail payload feeds it
 directly (kind `track` or `feed`). No Fountain work happens at choice time.
 
 **Sites (standard only, per request):**
-- Settings home: `add_options_page` / `render_settings_page()` std **216**
-  / **396** (tabs Settings + Cache) - a "Generate shortcode" box; plus an
-  optional per-row "copy shortcode" action on the Cache tab, which already
-  renders both GUIDs.
-- Page-edit home - no precedent in this plugin (zero editor code today):
-  block-editor sidebar via `enqueue_block_editor_assets`, classic-editor
-  Quicktags, or a media button.
+- Builder home (per decision 1): block-editor sidebar registered from
+  `enqueue_block_editor_assets` - no precedent in this plugin (zero
+  editor code today): `registerPlugin` + `PluginSidebar` (+ More-menu
+  item) in a small admin-only script; enqueue gate = block editor only.
+- Optional extra: per-row "copy shortcode" action on the Cache tab
+  (std ~1172 row), which already renders both GUIDs.
+- No settings-screen box, no classic-editor Quicktags/media button
+  (decision 1) - classic-editor posts simply have no builder UI.
 - Clipboard pattern to reuse: Pro's share button
   (`v4v-musiclink-pro-share-btn`, pro **2908-2923** -
   `navigator.clipboard.writeText()` with a transient "copied" label);
@@ -560,25 +562,168 @@ directly (kind `track` or `feed`). No Fountain work happens at choice time.
 - The builder must emit only whitelisted attribute names (std 1636/1637)
   and will gain `fountain` (O18) once that ships.
 
-**Open decisions:**
-1. Placement: Settings-screen box (cheapest - no editor dependency, no JS
-   on every edit screen) vs block-editor integration vs both.
-2. Which attributes the builder exposes: `album`+`track` only, or also
-   `header`, and later `fountain` (O18).
+**Decisions (2026-10-05):**
+1. Placement: **block-editor sidebar**. The builder lives in the
+   Gutenberg post editor: `enqueue_block_editor_assets` registers a
+   small admin-only script (`registerPlugin` + `PluginSidebar`, plus the
+   More-menu item), no settings-screen box and no classic-editor UI; the
+   optional per-row Cache-tab "copy shortcode" action stays an extra
+   only if later requested. Nothing loads on the front end.
+2. Header control: a **3-state select - "Site setting" (default),
+   "Always Show", "Always Hide"** - where Site setting OMITS the
+   attribute entirely (render()'s existing absent/unrecognized fallback
+   = the admin "Release header" setting), Always Show emits
+   `header="true"`, Always Hide emits `header="false"`. No change to the
+   shortcode attribute contract. The `fountain` attribute (O18) joins
+   the builder when that ships.
 
-**Plan sketch:** settings-screen box first - a title-text search input
-(query → admin AJAX → proxied `mi_search_hits()` results as
-guid + title/subtitle rows), a chosen row fills the builder's guid fields
-**and upserts the cache row via `mi_store_mi_fields()`**, optional header
-toggle, live-assembled `[musiclink …]` output, copy button ported from the
-Pro share pattern, client-side hints for the 256-byte cap and unknown
-attribute names; optionally a "copy shortcode" action on Cache-tab rows
-reusing the GUID cells already in the row; harness assertions that the box
-renders fully escaped, only whitelisted attribute names can appear in the
-emitted string, the AJAX handler rejects unauthenticated/cross-site calls,
-and a chosen result lands as a cache row with `fountain_url = ''`; README
-usage line updated. Block-editor integration only if open decision 1
-picks it.
+**Plan sketch:** block-editor sidebar - a title-text search input
+(debounced; query via an admin-only endpoint - REST route or
+admin-ajax, `manage_options` + nonce - proxying `mi_search_hits()`,
+each guid-only hit resolved server-side to display text), a results list
+whose chosen row fills the builder's guid fields **and upserts the cache
+row via `mi_store_mi_fields()`**, the 3-state header select, a
+live-assembled `[musiclink …]` preview, a copy button ported from the
+Pro share pattern (`navigator.clipboard.writeText()` + transient
+"copied" label) and/or insertion as a `core/shortcode` block at the
+caret, client-side hints for the 256-byte cap and unknown attribute
+names; optionally a "copy shortcode" action on Cache-tab rows reusing
+the GUID cells already in the row; harness assertions that AJAX/REST
+rejects unauthenticated/cross-site calls, only whitelisted attribute
+names can appear in the emitted string (Site setting must omit `header`
+rather than emit a sentinel value), and a chosen result lands as a cache
+row with `fountain_url = ''`; README usage line updated. The mechanics
+were explained to the user 2026-10-05 (registration, search flow,
+selection + cache write, insert-vs-copy, security model).
+
+---
+
+## O21. Standard version: remove automatic Fountain deep-link discovery (Pro keeps it)
+
+**Status: Planned** (user picked 2026-10-05 - "plan to remove the ability
+to automatically find the fountain deep from the standard version";
+implement only on request).
+
+**What:** the STANDARD plugin stops resolving Fountain deep links itself.
+It becomes Pro-only; standard never issues HTTP to fountain.fm again.
+
+**Remove (std only):**
+- `fountain_resolve()` (std 1794), `fountain_try_resolve()` (std 1861 -
+  the `wp_remote_post` to `fountain.fm/search`), the constant fallback
+  `V4V_MUSICLINK_FOUNTAIN_NEXT_ACTION` (std 1796),
+  `fountain_autodetect_next_actions()` (std 1997 - 15-min throttle +
+  chunk crawl + self-heal `update_option` writes), and
+  `fountain_scan_chunks_for_actions()` (std 2086).
+- `fountain_negative_cache_ttl()` (std 1950) and its fountain negative
+  transients; `fountain_path_segment()` (std 2179 - its only caller is
+  the resolve path). The FAIL/SOFT cache TTL constants stay: Music Index
+  misses still use them.
+- `store_fountain_link()` (std 825) and its single call site (std 1700 -
+  the write-on-hit in `render()`); `fountain_calls()` expectations flip
+  to always-empty for std.
+- The settings field "Fountain next-action header" (std 617-635) and
+  every read/write of the `v4v_musiclink_fountain_next_action` option.
+  Stale option value: leave orphaned (harmless) unless a `delete_option`
+  cleanup is wanted on upgrade - minor open point.
+
+**Keep (std):**
+- `get_cached_fountain_url()` read path - a cached deep link keeps
+  rendering (manual Cache-tab entries, rows written by earlier versions).
+- `render()`'s O15 quoted-search fallback and the empty-text
+  `fountain.fm/discover` default; the confirm-modal + launch logging;
+  Cache-tab `fountain_url` editing (manual is now the ONLY way standard
+  gets a deep link); all MI machinery; the whole Pro plugin unchanged.
+
+**Resulting standard behaviour:** cached deep link if one exists on the
+row, otherwise the Fountain search fallback for the release - one button,
+zero background crawls, no fragile unofficial-Server-Action dependency in
+the free tier. `fountain_resolve()` shape in `render()`: cached branch
+stays, the else-branch loses resolve/store and falls straight through to
+the O15 fallback.
+
+**Interactions:** O18's `fountain=` attribute becomes standard's only
+programmatic deep-link source; O15/O9/O10 unaffected for Pro.
+
+**Docs:** standard plugin header Fountain section (std ~19-28, ~55-63),
+settings help text, README standard section + Target-apps wording
+(mark auto-resolution as Pro-only), CHANGELOG "Removed" entry at release.
+
+**Implementation steps (ordered):**
+1. `render()` std: collapse the Fountain block to
+   `cached ? cached : O15-search-fallback`. Keep the
+   `$fountain_search_text` computation (track title, else album title,
+   else `''` - the `''` case keeps the discover default), delete the
+   `fountain_resolve()` call, the hit branch and the
+   `store_fountain_link()` call; rewrite the comment above the block
+   (currently references `FOUNTAIN_NEXT_ACTION`).
+2. Delete the discovery machinery: `fountain_resolve` (1794),
+   `fountain_try_resolve` (1861), `fountain_negative_cache_ttl` (1950),
+   `fountain_autodetect_next_actions` (1997),
+   `fountain_scan_chunks_for_actions` (2086), `extract_fountain_hit`
+   (2136), `fountain_path_segment` (2179) - roughly contiguous std
+   1794-2200 - plus `store_fountain_link()` (825), the
+   `$last_fountain_status` property (169) and its docblock (~165).
+   KEEP `get_cached_fountain_url()` (801) and the FAIL/SOFT TTL
+   constants (Music Index still uses them).
+3. Settings: delete the whole "Fountain next-action header" `<tr>`
+   (~614-638) AND its `register_setting()` entry + sanitize callback
+   (~227-231). The stale `v4v_musiclink_fountain_next_action` option
+   value stays orphaned in the DB - nothing reads it, and post-O17 there
+   is no migration machinery to hook a `delete_option` into (not worth
+   inventing one for a dead key).
+4. Standard file header: drop the a)-d) next-action capture
+   instructions + self-heal paragraph (~13-28) and the "Falls back to ...
+   self-heal" paragraph (~50-63); same for any remaining docblock that
+   describes background crawling.
+5. Grep audit, expect zero remaining hits in std outside deliberately
+   kept comments: `fountain_resolve|fountain_try_resolve|autodetect|
+   extract_fountain_hit|path_segment|store_fountain_link|next-action|
+   last_fountain_status|FOUNTAIN_NEXT_ACTION`.
+6. Harness rework (below), full verification, README edits.
+
+**Harness rework (verified against the current files):**
+- `tmp/test_stored_links.php` (both-class loop): introduce
+  `$can_resolve = 'V4V_Music_Link_Resolver_Pro' === $class`.
+  - Pass for std unchanged: **S1** (cached link, no HTTP expected),
+    **S3** (search fallback + never stored - already the O15 shape),
+    **S5** (`$warm_resolve()` is a no-op for std; it already asserts no
+    fountain HTTP + no write), all A (admin-post edit/delete - manual
+    editing stays), B/H/M/R sections.
+  - Branch on `$can_resolve`: **S2** - pro keeps its upsert assertions;
+    std asserts blank link renders the O15 search URL, `fountain_calls()`
+    empty, and ZERO link-half `ON DUPLICATE KEY UPDATE` statements (vs
+    pro's `1 === count($link_upserts)`). **S4** - pro keeps re-search +
+    fill-in; std asserts the row stays blank + fallback rendered + no
+    write. **S6** - pro keeps `$deep` on the track render; std expects
+    the search fallback instead (the album-row manual link NOT being
+    reused already passes for std).
+- `tmp/fountain_fix_test.php`: its `$classes` loop reflectively invokes
+  `fountain_try_resolve`/`fountain_autodetect_next_actions`/
+  `fountain_resolve` on BOTH classes (line 154-165) - std entries must
+  go (methods deleted). Optionally precede the Pro loop with two std
+  checks that `method_exists(..., 'fountain_resolve')` is false, so the
+  removal itself is pinned. Expect ~156 -> ~80 assertions.
+- `tmp/fountain_live_test.php`: drop the 2 `V4V_Music_Link_Resolver`
+  rows from `$cases` (117-121) - standard has nothing to resolve. Pro's
+  2 rows keep their 10 checks each (20 -> 10 expected PASS lines).
+- `tmp/test_app_launch.php`: verified unaffected (fountain app is
+  `enabled => false` in its fixture).
+- `tmp/probe_woman.php`: diagnostic (not in the 14-file harness loop)
+  that calls the standard class's resolve - annotate its header as
+  Pro-only/obsolete; not a gate.
+- e2e (`gen_page.php`) instantiates the PRO class only - unchanged.
+  mi_ttl / search_pagination / canonical_guid / v4vmusic_url / log_* /
+  missing_params: no std-fountain coupling (confirm by running).
+
+**Verification:** `./php/php -l` both files; all 14 harnesses (expect
+movement: stored_links net −/+, fix_test ~80, live 10 - record actuals);
+`./php/php tmp/e2e/gen_page.php`; grep audit from step 5.
+
+**Docs (README now, CHANGELOG at release):** standard plugin header +
+settings help already handled in steps 3-4; README - Target-apps Fountain
+row must split: auto-resolution/self-heal = Pro only, standard = cached or
+manual link else the quoted search fallback; CHANGELOG "Removed" entry
+for Resolver, untouched Pro entry.
 
 ---
 
