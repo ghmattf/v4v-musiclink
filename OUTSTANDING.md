@@ -602,7 +602,8 @@ selection + cache write, insert-vs-copy, security model).
 
 **Status: Planned** (user picked 2026-10-05 - "plan to remove the ability
 to automatically find the fountain deep from the standard version";
-implement only on request).
+implemented 2026-10-05, uncommitted - remove this item when the release
+ships).
 
 **What:** the STANDARD plugin stops resolving Fountain deep links itself.
 It becomes Pro-only; standard never issues HTTP to fountain.fm again.
@@ -688,7 +689,11 @@ settings help text, README standard section + Target-apps wording
     **S3** (search fallback + never stored - already the O15 shape),
     **S5** (`$warm_resolve()` is a no-op for std; it already asserts no
     fountain HTTP + no write), all A (admin-post edit/delete - manual
-    editing stays), B/H/M/R sections.
+    editing stays), B/M/R and all but one H check. **H1** needed a
+    branch too: after the scoped clear, std's re-render does not
+    re-resolve, so it asserts the fallback instead of `$deep` coming
+    back (the clear itself and the "unviewed release stays blank" check
+    stay shared).
   - Branch on `$can_resolve`: **S2** - pro keeps its upsert assertions;
     std asserts blank link renders the O15 search URL, `fountain_calls()`
     empty, and ZERO link-half `ON DUPLICATE KEY UPDATE` statements (vs
@@ -711,13 +716,21 @@ settings help text, README standard section + Target-apps wording
 - `tmp/probe_woman.php`: diagnostic (not in the 14-file harness loop)
   that calls the standard class's resolve - annotate its header as
   Pro-only/obsolete; not a gate.
+- `tmp/test_fountain_path.php` (missed by the pre-audit grep): loops
+  BOTH classes through `fountain_path_segment()`/`extract_fountain_hit()`
+  via reflection and fatals on std - Pro-only now, with two std
+  `method_exists` absence pins (56 -> 30 expected PASS).
 - e2e (`gen_page.php`) instantiates the PRO class only - unchanged.
   mi_ttl / search_pagination / canonical_guid / v4vmusic_url / log_* /
   missing_params: no std-fountain coupling (confirm by running).
 
-**Verification:** `./php/php -l` both files; all 14 harnesses (expect
-movement: stored_links net −/+, fix_test ~80, live 10 - record actuals);
-`./php/php tmp/e2e/gen_page.php`; grep audit from step 5.
+**Verification (done 2026-10-05):** `./php/php -l` clean on both files;
+grep audit zero hits; 12 harnesses pass - stored_links 358, fix_test 84
+(std-absence pins), live 10 (Pro rows only), fountain_path 30 (Pro-only
++ absence pins), app_launch 114, log_limits 93, search_pagination 44,
+canonical 36, log_scope 29, v4vmusic 28, mi_ttl 26, missing_params 12;
+candidate/case still 404 (O9, known); e2e 14/14; probe_woman prints its
+obsolescence notice and exits 0.
 
 **Docs (README now, CHANGELOG at release):** standard plugin header +
 settings help already handled in steps 3-4; README - Target-apps Fountain

@@ -10,7 +10,7 @@ The tool is a WordPress plugin provided in two versions. Both versions can run o
 
 - Accepts `album` and (optionally) `track` GUID parameters within the shortcode, plus an optional `header="true|false"` attribute that shows or hides the release header for that one placement.
 - Queries musicindex.org for album, track, artist, and art information and displays it on a page, with a button for each music player that takes the user directly to the album/track within that player.
-- Admin settings cover the release header, the Music apps (enable/disable, front-end order, icon overrides, and an optional random order), the Music Index refresh interval, and a **Cache** tab that lists the cached release rows (date-only timestamps, tick/cross art status) and lets you edit a row's artwork URL or Fountain.fm link, launch the link, delete rows, or clear the Fountain links.
+- Admin settings cover the release header, the Music apps (enable/disable, front-end order, icon overrides, and an optional random order), the Music Index refresh interval, and a **Cache** tab that lists the cached release rows (date-only timestamps, tick/cross art status) and lets you edit a row's artwork URL or Fountain.fm link (deep links are admin-supplied here - this version never resolves them), launch the link, delete rows, or clear the Fountain links.
 
 Usage:
 
@@ -46,7 +46,7 @@ Shortcode: `[musiclink_pro]` (accepts the same `album`/`track`/`header` attribut
 | StableKraft.app | Formulaic GUID-based URL, no lookup required |
 | PodTunes.app | Formulaic GUID-based URL, no lookup required |
 | v4vmusic.com | Search by title (resolved from Music Index) — no public album/track pages exist |
-| Fountain.fm | Resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint; on failure the button lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known |
+| Fountain.fm | **Pro:** resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint. **Standard:** performs no Fountain discovery - the button uses a link stored on the cache row (set on the Cache tab) when one exists. Either way, when no link exists the button lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known |
 
 Under **Settings → V4V MusicLink** (standard) / **Settings → V4V MusicLink Pro** (Pro) each app can be individually disabled, given a custom icon URL, and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
 

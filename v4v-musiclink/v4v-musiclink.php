@@ -9,22 +9,11 @@
  * 1. Install and activate this plugin. No API credentials needed for
  *    Stablekraft, PodTunes.app, or Music Index (title/artwork lookups).
  *
- *    Fountain.fm direct links are OPTIONAL and need one extra bit of
- *    config, since Fountain has no public/stable API - only an internal,
- *    undocumented endpoint their own web app uses:
- *      a) Open https://fountain.fm in a browser, dev tools open,
- *         Network tab, Fetch/XHR filter on.
- *      b) Search for anything in Fountain's own search box.
- *      c) Find the POST request to "fountain.fm/search", open its Headers, copy
- *         the "next-action" header value (a long hex string).
- *      d) Paste it into Settings > V4V MusicLink in wp-admin.
- *    This value is a build fingerprint that changes whenever Fountain
- *    redeploys - if it goes stale, the plugin now tries to self-heal
- *    automatically (see below) before falling back to a plain link, so
- *    manual re-capture is a fallback rather than a requirement. Nothing
- *    breaks if this is left unset from the start either - Fountain just
- *    always falls back to a Fountain search for the release until a value
- *    (manual or auto-detected) is available.
+ *    Fountain.fm deep links are OPTIONAL and admin-supplied: paste one
+ *    onto the Cache tab for a release, or leave the button to fall back
+ *    to a Fountain search for the release title. This version performs
+ *    no Fountain discovery itself (no endpoint config, no background
+ *    crawling) - the Pro version resolves and self-heals them.
  * 2. Use the shortcode inline in any post/page, with explicit attributes -
  *    this is the ONLY way to use it; there is no URL-parameter or search
  *    UI mode:
@@ -51,16 +40,12 @@
  *   required - so the button renders even if Music Index titles were
  *   only partially resolved.
  * - Fountain: no reliable public guid-based or search-page link exists
- *   (both confirmed to 404 by direct testing). Their only resolution
- *   mechanism is the unofficial Server Action endpoint described above.
- *   If a resolution attempt fails (most often because the configured
- *   "next-action" has gone stale after a Fountain redeploy), the plugin
- *   automatically tries to self-heal: it crawls fountain.fm's own script
- *   files looking for a fresh next-action value (best-effort heuristic,
- *   throttled to once per 15 minutes), retries once with it, and - if
- *   that succeeds - saves it so future requests use it directly without
- *   repeating the crawl. Falls back to a Fountain search for the release
- *   (or fountain.fm/discover if no title is known) if all of that fails too.
+ *   (both confirmed to 404 by direct testing). This version never
+ *   resolves one: the button uses a link stored on the cache row (set
+ *   by hand on the Cache tab) when there is one, and otherwise falls
+ *   back to a Fountain search for the release (or fountain.fm/discover
+ *   if no title is known). The Pro version resolves links itself via
+ *   the unofficial Server Action endpoint, with background self-healing.
  *
  * PER-APP CONTROLS: under Settings > V4V MusicLink, each of the four
  * apps (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) can be
@@ -84,7 +69,8 @@
  * V4V MusicLink, "Music Index refresh", default 12 hours), and only
  * front-end page renders may trigger it - never search or logging.
  * Fountain.fm links are permanent: they never go stale and are never
- * auto-refreshed (blank a link on the Cache tab to force a re-search).
+ * auto-refreshed (blank a link on the Cache tab to drop the button back
+ * to the search fallback; this version never re-resolves a link).
  * Failure throttles (not-found / outage) stay in short-lived
  * transients.
  *
@@ -160,23 +146,6 @@ class V4V_Music_Link_Resolver {
 	private $last_mi_status = 0;
 
 	/**
-	 * HTTP status of the most recent fountain_try_resolve() call (0 =
-	 * transport failure, redirect, or a 200 body we couldn't read as a
-	 * hits payload). Lets fountain_negative_cache_ttl() separate a
-	 * definitive Fountain answer from an unreliable failure - the same
-	 * policy negative_cache_ttl() applies to the Music Index API.
-	 */
-	private $last_fountain_status = 0;
-
-	/**
-	 * Whether the last extract_fountain_hit() actually parsed a hits
-	 * array (an empty one included = a trustworthy "Fountain has no
-	 * results for this"). When false after a 200, the body was not the
-	 * shape we understand, so the miss is unconfirmed.
-	 */
-	private $last_fountain_hits_parsed = false;
-
-	/**
 	 * Whether a stale cache row may queue a background Music Index
 	 * refresh in this request. Default-deny: only render() turns it on,
 	 * so the Pro search box, the log beacons and the og: preview can
@@ -224,11 +193,6 @@ class V4V_Music_Link_Resolver {
 	}
 
 	public function register_settings() {
-		register_setting( 'v4v_musiclink', 'v4v_musiclink_fountain_next_action', array(
-			'type'              => 'string',
-			'sanitize_callback' => 'sanitize_text_field',
-			'default'           => '',
-		) );
 		register_setting( 'v4v_musiclink', 'v4v_musiclink_show_header', array(
 			'type'              => 'boolean',
 			'sanitize_callback' => 'rest_sanitize_boolean',
@@ -614,28 +578,6 @@ class V4V_Music_Link_Resolver {
 					</tr>
 					<tr>
 						<th scope="row">
-							<label for="v4v_musiclink_fountain_next_action"><?php esc_html_e( 'Fountain "next-action" header', 'v4v-musiclink' ); ?></label>
-						</th>
-						<td>
-							<input
-								type="text"
-								id="v4v_musiclink_fountain_next_action"
-								name="v4v_musiclink_fountain_next_action"
-								value="<?php echo esc_attr( get_option( 'v4v_musiclink_fountain_next_action', '' ) ); ?>"
-								class="regular-text code"
-							/>
-							<p class="description">
-								<?php
-								esc_html_e(
-									'Optional starting point for direct Fountain.fm links (without any value here, Fountain buttons link to a Fountain search for the release until one is found). This value changes whenever Fountain redeploys - if it goes stale, the plugin automatically tries to detect a fresh one in the background and saves it here when successful, so manual updates usually aren\'t needed. If you want to set it directly anyway: open fountain.fm with browser dev tools\' Network tab open, search for anything, find the POST request to "fountain.fm/search", and copy its "next-action" request header.',
-									'v4v-musiclink'
-								);
-								?>
-							</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">
 							<label for="v4v_musiclink_mi_refresh_hours"><?php esc_html_e( 'Music Index refresh', 'v4v-musiclink' ); ?></label>
 						</th>
 						<td>
@@ -793,8 +735,8 @@ class V4V_Music_Link_Resolver {
 
 	/**
 	 * The cached Fountain link for an exact album/track pair, or '' when
-	 * there is no row OR the row's link was blanked (an admin blanking
-	 * the field is the documented way to force a fresh search).
+	 * there is no row OR the row's link was blanked (blanking drops the
+	 * button back to the search fallback).
 	 * Returning '' for both cases means the caller only ever needs one
 	 * branch: '' -> search.
 	 */
@@ -805,55 +747,10 @@ class V4V_Music_Link_Resolver {
 	}
 
 	/**
-	 * Persists a freshly resolved Fountain link plus the guids/titles it
-	 * was resolved for. Only ever called from the path that had no usable
-	 * cached link, so a link already in use cannot be overwritten here.
-	 *
-	 * Link-scoped on purpose: guids/titles only apply on insert, and the
-	 * ON DUPLICATE KEY UPDATE touches fountain_url/fountain_updated_at
-	 * ONLY - never the Music Index half (mi_updated_at), which this
-	 * function does not own. ON DUPLICATE KEY rather than
-	 * SELECT-then-INSERT: two concurrent first renders of the same
-	 * release would otherwise race into a duplicate-key failure on the
-	 * unique lookup_hash.
-	 *
-	 * fountain_updated_at stores site-local time (current_time('mysql')),
-	 * and the admin table prints it raw - converting it again with
-	 * get_date_from_gmt() would shift it by the site's GMT offset (the
-	 * display half of O3).
-	 */
-	private function store_fountain_link( $album, $track, $url, $album_title, $track_title, $artist ) {
-		global $wpdb;
-		$table = $this->cache_table();
-		$hash  = $this->cache_row_hash( $album, $track );
-
-		$wpdb->query(
-			$wpdb->prepare(
-				"INSERT INTO {$table}
-					(lookup_hash, album_guid, track_guid, album_title, track_title, artist, image_url, fountain_url, fountain_updated_at)
-				VALUES (%s, %s, %s, %s, %s, %s, '', %s, %s)
-				ON DUPLICATE KEY UPDATE
-					fountain_url = VALUES(fountain_url),
-					fountain_updated_at = VALUES(fountain_updated_at)",
-				$hash,
-				$album,
-				$track,
-				$album_title,
-				$track_title,
-				$artist,
-				$url,
-				current_time( 'mysql' )
-			)
-		);
-
-		unset( $this->row_memo[ $hash ] );
-	}
-
-	/**
 	 * Whether an admin-supplied stored link is acceptable: always https,
 	 * and on the app's own domain when we know it (fountain.fm for
-	 * Fountain, including subdomains - matching the trust rule used for
-	 * Fountain's script discovery). An unknown/future app gets the https
+	 * Fountain, including subdomains - the domain Fountain's own pages
+	 * are served from). An unknown/future app gets the https
 	 * check only, since there is no registry domain to compare against.
 	 */
 	private function is_valid_stored_url( $url, $app ) {
@@ -1244,12 +1141,12 @@ class V4V_Music_Link_Resolver {
 
 	/**
 	 * admin-post.php handler behind both Cache-tab edit controls: the
-	 * Fountain link (or a blank, forcing a re-search) must be an https
-	 * URL on the app's own domain; the artwork URL only has to be
-	 * http(s), or blank to drop the art. Each edit stamps its own half's
-	 * timestamp - fountain_updated_at for the link, mi_updated_at for
-	 * artwork, which also defers the next background pull - and leaves
-	 * the other half alone.
+	 * Fountain link (or a blank, to drop back to the search fallback)
+	 * must be an https URL on the app's own domain; the artwork URL only
+	 * has to be http(s), or blank to drop the art. Each edit stamps its
+	 * own half's timestamp - fountain_updated_at for the link,
+	 * mi_updated_at for artwork, which also defers the next background
+	 * pull - and leaves the other half alone.
 	 */
 	public function handle_update_cache_row() {
 		check_admin_referer( 'v4v_musiclink_update_cache_row' );
@@ -1650,63 +1547,35 @@ JS;
 		}
 
 		// --- Fountain: no reliable public link exists via guid or their
-		// search page directly (both confirmed to 404 - see project notes).
-		// Their ONLY resolution mechanism is an unofficial, undocumented
-		// Next.js Server Action - fragile because its "next-action" build
-		// fingerprint changes whenever Fountain redeploys. We call it here,
-		// but cache successes for a long time and always fall back to a
-		// Fountain search for the release title (or fountain.fm/discover
-		// when no title is known) on any failure, so a stale/broken hash
-		// never breaks the button - it just stops being a direct link
-		// until the hash is refreshed (see FOUNTAIN_NEXT_ACTION below).
+		// search page directly (both confirmed to 404 - see project notes),
+		// and this version never resolves one itself (the Pro version
+		// does): the button uses a link already on the cache row - set by
+		// hand on the Cache tab - and otherwise falls back to a Fountain
+		// search for the release title (or fountain.fm/discover when no
+		// title is known).
 		if ( $this->is_app_enabled( 'fountain' ) ) {
 			$fountain_url = 'https://fountain.fm/discover';
 
-			// Cached link first: an exact album/track match with a link on
-			// file is used exactly as it stands - no search, no transient,
-			// no self-heal and no write-back - so a link that already
-			// works keeps working through a Fountain redeploy, and one
-			// corrected by hand is never reverted. '' means either "no
-			// entry yet" or "entry whose link was blanked to force a
-			// re-search"; both fall through to the search below.
+			// Cached link: an exact album/track match with a link on file
+			// is used exactly as it stands - no search and no write-back -
+			// so a link corrected by hand is never reverted. '' means
+			// either "no entry yet" or "entry whose link was blanked";
+			// both fall through to the search fallback below.
 			$cached_url = $this->get_cached_fountain_url( $album, $track );
 
 			if ( '' !== $cached_url ) {
 				$fountain_url = $cached_url;
 			} else {
-				// Keep the search text and the guid we're matching against in
-				// sync: if track-level data didn't resolve, fall back to the
-				// ALBUM for both, rather than searching by album title while
-				// still trying to match against the track guid (which would
-				// never succeed).
-				$fountain_has_track   = $has_track && $track_data;
-				$fountain_search_text = $fountain_has_track ? $track_data['title'] : ( $feed_data ? $feed_data['title'] : '' );
-				$fountain_target_guid = $fountain_has_track ? $track : $album;
-				$fountain_hit         = $fountain_search_text ? $this->fountain_resolve( $fountain_target_guid, $fountain_search_text ) : null;
+				// Track title when the shortcode carries track data, else
+				// the album title; '' keeps the discover default above.
+				$fountain_search_text = ( $has_track && $track_data ) ? $track_data['title'] : ( $feed_data ? $feed_data['title'] : '' );
 
-				if ( $fountain_hit ) {
-					// The path prefix comes from Fountain's own _type on the
-					// matched hit - see fountain_path_segment().
-					$fountain_url = 'https://fountain.fm/'
-						. $this->fountain_path_segment( $fountain_hit, $fountain_has_track )
-						. '/'
-						. rawurlencode( $fountain_hit['id'] );
-
-					// Only a real deep link is ever stored: neither
-					// fallback (fountain.fm/discover, or the release
-					// search URL below) may ever be persisted, or it
-					// would pin a generic Fountain link to this release
-					// forever.
-					$this->store_fountain_link( $album, $track, $fountain_url, $album_title, $track_title, $artist );
-				} elseif ( $fountain_search_text ) {
-					// Unresolved (or no cached link): hand the visitor
-					// Fountain's own search results for this release -
-					// the double quotes are Fountain's exact-phrase
-					// syntax - instead of the generic discover page. One
-					// click lands on results for the title we already
-					// have. Just as generic as discover, so the never-
-					// store rule above still applies; with no title to
-					// pre-fill the discover default set above stands.
+				if ( $fountain_search_text ) {
+					// Hand the visitor Fountain's own search results for
+					// this release - the double quotes are Fountain's
+					// exact-phrase syntax - instead of the generic
+					// discover page. Just as generic as discover, so
+					// neither is ever persisted to the cache row.
 					$fountain_url = 'https://fountain.fm/search?q='
 						. urlencode( '"' . $fountain_search_text . '"' );
 				}
@@ -1774,422 +1643,6 @@ JS;
 		</div>
 		<?php
 		return ob_get_clean();
-	}
-
-	/**
-	 * Resolves a guid to Fountain's opaque internal ID plus the content
-	 * type Fountain filed it under, via their unofficial Server Action
-	 * search endpoint. Returns array( 'id' => ..., 'type' => ... ) or
-	 * null on any failure - missing config, network error, unexpected
-	 * response shape, or no matching hit - so the caller can fall back to
-	 * a plain link.
-	 *
-	 * Successes are cached for a long time (30 days) since a release's
-	 * Fountain ID never changes once assigned. Failures are cached briefly
-	 * (1 hour) so a temporarily stale next-action hash doesn't cause a
-	 * repeated slow request on every page view, but recovers automatically
-	 * once the hash is fixed.
-	 */
-
-	private function fountain_resolve( $guid, $search_text ) {
-		$next_action = get_option( 'v4v_musiclink_fountain_next_action', '' );
-		if ( ! $next_action && defined( 'V4V_MUSICLINK_FOUNTAIN_NEXT_ACTION' ) ) {
-			$next_action = V4V_MUSICLINK_FOUNTAIN_NEXT_ACTION; // Optional fallback for advanced users.
-		}
-
-		if ( $next_action ) {
-			$result = $this->fountain_try_resolve( $guid, $search_text, $next_action );
-			if ( $result ) {
-				return $result;
-			}
-			if ( $this->last_fountain_hits_parsed ) {
-				// The stored id answered with a readable hits payload that
-				// simply doesn't contain this guid: the action works and
-				// Fountain just doesn't know the release, so there is nothing
-				// for self-heal to fix - don't crawl for a new id every 15
-				// minutes on a release that can never resolve.
-				return null;
-			}
-		}
-
-		// No stored value, or the stored one is dead (Fountain rotates these
-		// ids on every deploy, and a redeploy can leave several of them side
-		// by side in the same chunk where only one still works). Probe the
-		// detected candidates in scan order and persist the FIRST one that
-		// actually answers with a hits payload - never a silent, 404 or
-		// unparsable one, or a freshly discovered dead id would be pinned as
-		// the stored value and self-heal would re-derive it forever. A miss
-		// cached for candidate #1 does not block candidate #2: those caches
-		// are keyed per id (see fountain_try_resolve()).
-		foreach ( $this->fountain_autodetect_next_actions() as $candidate ) {
-			if ( $candidate === $next_action ) {
-				continue; // Already tried (and failed) above - don't repeat it.
-			}
-
-			$result = $this->fountain_try_resolve( $guid, $search_text, $candidate );
-			if ( $result ) {
-				update_option( 'v4v_musiclink_fountain_next_action', $candidate );
-				return $result;
-			}
-
-			if ( $this->last_fountain_hits_parsed ) {
-				// Live, readable "no match": this id IS a working search
-				// action (the release just isn't in Fountain's index), so
-				// store it - otherwise the option keeps pointing at a dead id
-				// and every later release repeats this whole crawl.
-				update_option( 'v4v_musiclink_fountain_next_action', $candidate );
-				return null;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * A single resolution attempt against Fountain's unofficial search
-	 * endpoint using a specific next-action value. Cached per guid+value
-	 * pair, so a stale cached failure never survives a next-action change;
-	 * how long a miss is remembered depends on how trustworthy it was
-	 * (see fountain_negative_cache_ttl()).
-	 *
-	 * last_fountain_hits_parsed is reset up front so it always describes
-	 * THIS attempt: anything that short-circuits before the body is parsed
-	 * (a cached miss, a 404, a transport error) leaves it false, which is
-	 * what lets fountain_resolve() tell "this id is alive and simply has no
-	 * match" from "this id is dead" while probing several candidates.
-	 */
-	private function fountain_try_resolve( $guid, $search_text, $next_action ) {
-		$this->last_fountain_hits_parsed = false;
-
-		// v5: the cached value is now the whole hit (id + _type), not just
-		// the id, so the old v4 entries - which carry no type and would
-		// otherwise survive for up to 30 days - are deliberately left
-		// behind and re-resolved once each.
-		$cache_key = 'fountain_id_v5_' . md5( $guid . '|' . $next_action );
-		$cached    = get_transient( $cache_key );
-		if ( false !== $cached ) {
-			return $cached ? $cached : null;
-		}
-
-		// redirection => 0: never let a remote host bounce an outbound
-		// request elsewhere - WP's default 5 hops would follow an open
-		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
-		//
-		// POST target is /search, NOT the site root: searchContent is a
-		// page-bound action registered from the search page's own module
-		// graph, and since Fountain's restructure a root POST gets an
-		// empty application/json {} back instead of results (confirmed
-		// live in 2026 - same id, same body, only the path differs),
-		// while the same POST to /search returns the hits payload. The
-		// headers and body below stay exactly what Fountain's own client
-		// sends (the state-tree header is tolerated as-is).
-		$response = wp_remote_post( 'https://fountain.fm/search', array(
-			'timeout'     => 8,
-			'redirection' => 0,
-			'headers'     => array(
-				'Accept'                 => 'text/x-component',
-				'Content-Type'           => 'text/plain;charset=UTF-8',
-				'next-action'            => $next_action,
-				'next-router-state-tree' => '%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C16%5D',
-				'Origin'                 => 'https://fountain.fm',
-				'Referer'                => 'https://fountain.fm/',
-				'Accept-Language'        => 'en-US,en;q=0.8',
-				'Sec-Fetch-Dest'         => 'empty',
-				'Sec-Fetch-Mode'         => 'cors',
-				'Sec-Fetch-Site'         => 'same-origin',
-				'Sec-GPC'                => '1',
-				'sec-ch-ua'              => '"Not=A?Brand";v="99", "Chromium";v="151"',
-				'sec-ch-ua-mobile'       => '?0',
-				'sec-ch-ua-platform'     => '"Linux"',
-				'User-Agent'             => 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
-			),
-			'body' => wp_json_encode( array( $search_text, array() ) ),
-		) );
-
-		$this->last_fountain_status = is_wp_error( $response )
-			? 0
-			: (int) wp_remote_retrieve_response_code( $response );
-
-		$hit = null;
-		if ( 200 === $this->last_fountain_status ) {
-			$hit = $this->extract_fountain_hit( wp_remote_retrieve_body( $response ), $guid );
-			if ( ! $hit && ! $this->last_fountain_hits_parsed ) {
-				// A 200 whose body wasn't a readable hits payload is not a
-				// trustworthy "no" - treat it like an unreliable failure.
-				$this->last_fountain_status = 0;
-			}
-		}
-
-		if ( ! $hit ) {
-			set_transient( $cache_key, '', $this->fountain_negative_cache_ttl() );
-			return null;
-		}
-
-		set_transient( $cache_key, $hit, 30 * DAY_IN_SECONDS );
-		return $hit;
-	}
-
-	/**
-	 * How long to remember a Fountain resolution miss - the Fountain-side
-	 * twin of negative_cache_ttl(), applying the same policy (#8) to
-	 * finding a hit:
-	 *
-	 *   - 404: Fountain doesn't know the next-action id (stale build
-	 *     fingerprint after a redeploy). The self-heal path then tries a
-	 *     FRESH id, whose attempts are cached under a different key, so
-	 *     the long TTL can never block recovery.
-	 *   - 200 whose hits payload we could read but which lacks our guid:
-	 *     Fountain genuinely has no match for this guid+title pair.
-	 *
-	 * Both are definitive and keep FAIL_CACHE_TTL. Everything else -
-	 * transport failure, 5xx, redirect, or a 200 body we couldn't read -
-	 * is unconfirmed and gets SOFT_FAIL_CACHE_TTL, so one blip can't pin
-	 * the button to the fallback (a Fountain search for the release) for a
-	 * full hour.
-	 */
-	private function fountain_negative_cache_ttl() {
-		return ( 200 === $this->last_fountain_status || 404 === $this->last_fountain_status )
-			? self::FAIL_CACHE_TTL
-			: self::SOFT_FAIL_CACHE_TTL;
-	}
-
-	/**
-	 * Best-effort background attempt to discover Fountain's current
-	 * "next-action" Server Action IDs by fetching Fountain's search page
-	 * AND its homepage, finding same-origin JS chunk URLs, and searching
-	 * each for 40-44 character hex strings appearing near the word
-	 * "search" (a plausibility filter - minifiers preserve string
-	 * literals but mangle variable/function names).
-	 *
-	 * Returns EVERY candidate the walk below finds as an ordered,
-	 * de-duplicated list (chunk order, then file order within a chunk), or
-	 * an empty list when nothing was found or the run is throttled.
-	 * Fountain publishes several near-"search" ids at once - typically an
-	 * older or unrelated action listed first - and rotates them on every
-	 * deploy, so a single "first one wins" pick is exactly how a dead id
-	 * got stored and re-derived forever (O11). The caller probes the list
-	 * in order instead; this function only gathers, and never decides
-	 * which id is live.
-	 *
-	 * The walk is two phases so a self-heal stays as cheap as it was
-	 * before O11: phase 1 is the chunks ONLY the search page references
-	 * (a handful - that is where the registration lives), walked in full;
-	 * phase 2, the homepage's historic first 20, is fallback coverage for
-	 * a layout Fountain has not used since 2026 and is only walked when
-	 * phase 1 found nothing. Walking phase 2 regardless - it holds the
-	 * big framework chunks - would add tens of downloads and megabytes to
-	 * a crawl that runs inline in a visitor's page render.
-	 *
-	 * The search page leads because that is where the registration now
-	 * lives: searchContent is bound from chunks ONLY /search references
-	 * (verified live in 2026 - there are zero near-"search" candidates
-	 * anywhere in the homepage's own chunks), so a homepage-only crawl
-	 * can no longer self-heal anything. If Fountain moved the registration
-	 * back into a chunk both pages share, phase 1 would come up empty and
-	 * phase 2 would pick it up.
-	 *
-	 * Throttled to at most once per 15 minutes (regardless of outcome) so
-	 * a broken detection mechanism doesn't repeatedly hammer fountain.fm
-	 * on every page view - a successful detection persists the new value
-	 * via update_option() in fountain_resolve() above, so this path is
-	 * only ever hit again if something's still wrong after that.
-	 */
-	private function fountain_autodetect_next_actions() {
-		$throttle_key = 'fountain_autodetect_throttle';
-		if ( get_transient( $throttle_key ) ) {
-			return array();
-		}
-		set_transient( $throttle_key, true, 15 * MINUTE_IN_SECONDS );
-
-		// Collect same-origin _next chunk URLs from both seed pages.
-		// redirection => 0: never let a remote host bounce an outbound
-		// request elsewhere - WP's default 5 hops would follow an open
-		// redirect to arbitrary (e.g. internal) addresses. SSRF hardening.
-		$seed_scripts = array(); // Seed URL => unique trusted chunk URLs on that page.
-		foreach ( array( 'https://fountain.fm/search', 'https://fountain.fm/' ) as $seed_url ) {
-			$seed_response = wp_remote_get( $seed_url, array(
-				'timeout'     => 10,
-				'redirection' => 0,
-			) );
-			if ( is_wp_error( $seed_response ) || 200 !== (int) wp_remote_retrieve_response_code( $seed_response ) ) {
-				continue;
-			}
-			preg_match_all( '/<script[^>]+src=["\']([^"\']+)["\']/i', wp_remote_retrieve_body( $seed_response ), $matches );
-
-			$found = array();
-			foreach ( $matches[1] as $src ) {
-				// Normalise relative forms first (protocol-relative "//host/x",
-				// root-relative "/path") so the check below sees a real URL.
-				if ( 0 === strpos( $src, '//' ) ) {
-					$src = 'https:' . $src;
-				} elseif ( 0 === strpos( $src, '/' ) ) {
-					$src = 'https://fountain.fm' . $src;
-				}
-
-				// Exact host match (apex or subdomain), HTTPS only. The previous
-				// substring check also accepted e.g. https://evil.tld/fountain.fm/_next/x.js,
-				// sending this server after whatever such a page declared. The
-				// scheme check keeps a cleartext http:// chunk - modifiable in
-				// transit - from supplying a next-action value this plugin then
-				// persists via update_option().
-				$host    = wp_parse_url( $src, PHP_URL_HOST );
-				$scheme  = wp_parse_url( $src, PHP_URL_SCHEME );
-				$trusted = $scheme && 'https' === strtolower( $scheme )
-					&& $host && ( 'fountain.fm' === $host || '.fountain.fm' === substr( $host, -12 ) );
-
-				if ( $trusted && false !== strpos( $src, '_next' ) ) {
-					$found[] = $src;
-				}
-			}
-			$seed_scripts[ $seed_url ] = array_values( array_unique( $found ) );
-		}
-		if ( ! $seed_scripts ) {
-			return array();
-		}
-
-		// Phase 1: chunks the search page references and the homepage does
-		// NOT - that delta is where the action registration lives now.
-		// Phase 2: the homepage's historic first 20 as fallback only, and
-		// only when phase 1 turned up nothing (see the docblock) - so a
-		// routine self-heal downloads the handful of delta chunks and
-		// stops instead of re-walking the homepage's big framework bundles.
-		// Both caps keep a chunk-storm from turning this into a full-site
-		// crawl; the 15-minute throttle bounds it anyway. A failed seed
-		// just contributes an empty list, so either page alone still
-		// yields a sane scan (homepage-only exactly matches the pre-2026
-		// behaviour as a floor).
-		$search_scripts = isset( $seed_scripts['https://fountain.fm/search'] )
-			? $seed_scripts['https://fountain.fm/search']
-			: array();
-		$home_scripts   = isset( $seed_scripts['https://fountain.fm/'] )
-			? $seed_scripts['https://fountain.fm/']
-			: array();
-
-		$candidates = $this->fountain_scan_chunks_for_actions(
-			array_slice( array_values( array_diff( $search_scripts, $home_scripts ) ), 0, 20 )
-		);
-
-		if ( ! $candidates ) {
-			$candidates = $this->fountain_scan_chunks_for_actions( array_slice( $home_scripts, 0, 20 ) );
-		}
-
-		return $candidates;
-	}
-
-	/**
-	 * Walks JS chunk URLs in order and returns every near-"search" hex id
-	 * they carry as an ordered, de-duplicated list (a hex seen in two
-	 * chunks is listed once, at its first position). A chunk that fails to
-	 * fetch simply contributes nothing - one missing chunk must not abort
-	 * the walk.
-	 */
-	private function fountain_scan_chunks_for_actions( $script_urls ) {
-		$candidates = array(); // Keyed by hex => order-preserving de-duplication.
-		foreach ( $script_urls as $script_url ) {
-			$response = wp_remote_get( $script_url, array(
-				'timeout'     => 8,
-				'redirection' => 0,
-			) );
-			if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
-				continue;
-			}
-			$js = wp_remote_retrieve_body( $response );
-
-			if ( ! preg_match_all( '/[0-9a-f]{40,44}/i', $js, $hex_matches, PREG_OFFSET_CAPTURE ) ) {
-				continue;
-			}
-			foreach ( $hex_matches[0] as $hex_match ) {
-				$hex    = $hex_match[0];
-				$offset = $hex_match[1];
-				$window = substr( $js, max( 0, $offset - 300 ), 600 );
-				if ( false !== stripos( $window, 'search' ) ) {
-					$candidates[ $hex ] = true;
-				}
-			}
-		}
-
-		return array_keys( $candidates );
-	}
-
-	/**
-	 * Parses Fountain's React Server Components wire format looking for
-	 * the chunk containing a "hits" array, then returns the _id AND _type
-	 * of whichever hit's _guid matches ours, as array( 'id' => ..., 'type'
-	 * => ... ). The _type is essential: Fountain serves a different path
-	 * prefix per type (see fountain_path_segment()), and guessing it from
-	 * the shortcode's own attributes 404s whenever Fountain has filed the
-	 * release under the other category.
-	 *
-	 * IMPORTANT: this chunk is NOT reliably at the start of its own line -
-	 * confirmed via live testing that it can be glued directly onto the
-	 * end of a preceding text chunk with no newline separator at all
-	 * (e.g. "...</p>1:{"hits":[...>). An earlier version of this parser
-	 * assumed line-start boundaries and silently failed to find real
-	 * matches because of this. Since the hits chunk is reliably the LAST
-	 * chunk in the stream, this instead searches for its distinctive
-	 * "N:{"hits":" marker anywhere in the body (no line-start assumption)
-	 * and takes everything from there to the end as the JSON payload.
-	 * Also maintains last_fountain_hits_parsed so
-	 * fountain_negative_cache_ttl() can tell a readable (even if empty)
-	 * answer from a body we couldn't understand.
-	 */
-	private function extract_fountain_hit( $raw_body, $target_guid ) {
-		$this->last_fountain_hits_parsed = false;
-		if ( ! preg_match( '/\d+:(\{"hits":.*)/s', (string) $raw_body, $matches ) ) {
-			return null;
-		}
-		$decoded = json_decode( trim( $matches[1] ), true );
-		if ( ! is_array( $decoded ) || ! isset( $decoded['hits'] ) || ! is_array( $decoded['hits'] ) ) {
-			return null;
-		}
-		// Past this point the answer is readable even if empty: a hits
-		// array without our guid is a trustworthy "no match".
-		$this->last_fountain_hits_parsed = true;
-		foreach ( $decoded['hits'] as $hit ) {
-			if ( isset( $hit['_guid'], $hit['_id'] ) && $hit['_guid'] === $target_guid ) {
-				return array(
-					'id'   => $hit['_id'],
-					'type' => isset( $hit['_type'] ) ? (string) $hit['_type'] : '',
-				);
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * The fountain.fm path prefix for a resolved hit.
-	 *
-	 * Fountain serves the SAME opaque id under four different prefixes,
-	 * chosen by how IT has filed the release - not by anything the
-	 * shortcode knows. Music ingested normally is TRACK/ALBUM, but a
-	 * release Fountain has categorised as a podcast is EPISODE/SHOW (this
-	 * happens to real music releases, e.g. an album Fountain ingested via
-	 * an RSS feed). The wrong prefix always renders Fountain's client-side
-	 * 404 - the response is still HTTP 200, so the status code cannot be
-	 * used to detect it.
-	 *
-	 * The type therefore decides the prefix. Only when Fountain omits a
-	 * type we recognise do we fall back to the historic guess - whether
-	 * the shortcode supplied a track guid - which preserves the previous
-	 * behaviour rather than degrading to a generic fallback.
-	 *
-	 * @param array $hit      Resolution result from extract_fountain_hit().
-	 * @param bool  $has_track Whether the shortcode carried track data (fallback only).
-	 */
-	private function fountain_path_segment( $hit, $has_track ) {
-		$by_type = array(
-			'TRACK'   => 'track',
-			'ALBUM'   => 'album',
-			'EPISODE' => 'episode',
-			'SHOW'    => 'show',
-		);
-
-		$type = isset( $hit['type'] ) ? strtoupper( (string) $hit['type'] ) : '';
-		if ( isset( $by_type[ $type ] ) ) {
-			return $by_type[ $type ];
-		}
-
-		return $has_track ? 'track' : 'album';
 	}
 
 	/**
@@ -2336,8 +1789,9 @@ JS;
 	/**
 	 * Writes freshly fetched MI data onto the cache row: the MI columns
 	 * plus mi_updated_at, and NOTHING else - fountain_url and
-	 * fountain_updated_at are owned by the link path and are never
-	 * touched here (the ON DUPLICATE KEY UPDATE lists only MI columns).
+	 * fountain_updated_at belong to the link half (Cache-tab edits and
+	 * the clear action) and are never touched here (the ON DUPLICATE KEY
+	 * UPDATE lists only MI columns).
 	 * A successful pull with no artwork still stamps mi_updated_at, so a
 	 * legitimately empty image_url never re-pulls.
 	 */
