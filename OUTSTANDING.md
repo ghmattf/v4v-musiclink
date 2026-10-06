@@ -492,109 +492,217 @@ README usage sections for both versions gain the attribute.
 
 ---
 
-## O19. Standard version: shortcode generator with Music Index search (block-editor sidebar)
+## O19. Standard version: block-editor shortcode block with Music Index search (values edited in the block settings pane)
 
-**Status: Planned** (user picked this 2026-10-05 with the search +
-cache-write requirements; placement and header-control decisions added
-the same day - see Decisions below; implement only on request).
+**Status: Planned** (user picked 2026-10-05; re-planned 2026-10-05 after
+O21 shipped - the shortcode values are edited from the block's settings
+pane, and the Fountain link is a cache-table-bound field rather than any
+shortcode attribute; implemented 2026-10-06, uncommitted - remove this
+item when the release ships. One manual editor smoke test remains, see
+Plan sketch step 6).
 
-**What:** a builder in the RESOLVER (standard) plugin that assembles
-`[musiclink album="…" track="…" header="…"]` for copy-paste, fed by a
-Music Index search box: the admin types **title text**, results come back
-from `https://api.musicindex.org/v1/search` (guids, resolved to display
-text), and picking a hit supplies the shortcode's guid attributes.
-**Decided 2026-10-05: picking a result also populates the cached links** -
-the chosen release is upserted into `{prefix}v4v_musiclink_cache` so the
-Cache tab shows it immediately (titles/artist/art stamped;
-`fountain_url` stays `''`, which by existing cache-row semantics makes the
-first render run the Fountain search - unchanged behaviour). The user
-named two possible homes - page/post edit or the plugin's Settings screen
-- placement is open decision 1.
+**What:** a custom Gutenberg block in the RESOLVER (standard) plugin
+whose saved content IS the shortcode - `save()` emits
+`[musiclink album="..." track="..." header="..."]` so the front end keeps
+its single, unchanged shortcode path - with every shortcode value edited
+from the block's **settings pane** (InspectorControls):
+
+- **Music Index search**: title text -> results via an editor-only REST
+  route over Pro's `mi_search_hits()` machinery -> picking a hit fills
+  the block's `album`/`track` attributes. Resolution of each guid-only
+  hit goes through `mi_get_track()`/`mi_get_feed()` exactly as Pro's
+  relay does, which already upserts the cache rows - so picked releases
+  appear on the Cache tab with titles/artist/art and `fountain_url = ''`.
+- **Header 3-state select**: Site setting / Always Show / Always Hide
+  (Decision 2, unchanged from the 2026-10-05 lock-in).
+- **Fountain deep-link field, bound to the cache row** (user decision
+  2026-10-05): the field reads the pair's `fountain_url` from
+  `{prefix}v4v_musiclink_cache` and writes edits back to that same cell
+  (same validation and stamp semantics as the Cache-tab editor). It is
+  NOT a shortcode attribute: nothing is added to the attribute contract,
+  no `fountain="..."` is ever emitted, and O18 stays independent and On
+  hold with its attribute design untouched.
 
 **Why:** the attribute contract has sharp edges hand-typing trips over:
-standard ignores **all** attributes if any name is unexpected (the
-`$unexpected` whitelist std **1636**), `guard_guid()` silently drops values
-over 256 bytes (std **1625**), and a missing `album` renders the usage
-message instead of the release (std `render()` 1646+). The GUIDs already
-sit in the Cache tab (`Album GUID` column header std **1172**, row fields
-`album_guid`/`track_guid`) but only for releases resolved at least once,
-and must be copied across by hand; searching by title removes both the
-GUID hunt and the chicken-and-egg.
+standard ignores **all** attributes if any name is unexpected
+(`$unexpected` std **1466**), `guard_guid()` silently drops values over
+256 bytes (std **1456**), and a missing `album` renders the usage message
+instead of the release (std `render()` ~1470, usage block ~1640). The
+GUIDs already sit on the Cache tab (`Album GUID` column header std
+**1001**, row fields `album_guid`/`track_guid`) but only for releases
+resolved at least once, and must be copied across by hand; searching by
+title removes both the GUID hunt and the chicken-and-egg. O21 sharpened
+the Fountain half: standard never resolves deep links any more, so a
+cache row's `fountain_url` (Cache tab or this block's field) is the only
+way a release ever gets a direct Fountain button - without one the button
+renders the O15 quoted-search fallback.
 
-**Search - port from Pro, admin-side:** standard already has
-`MI_ROOT`/`MI_API_BASE` (std **101-102**) and `mi_api_get()` (std **2676**)
-but no search machinery at all. The Pro pieces to port: `mi_search_hits()`
-(pro **3354-3416** - cursor batches of `/search?q=&limit=`, per-query
-transient, dedupe, relevance order preserved), `ajax_search()` (pro
-**3468+**; its docblock records that *"search results only contain guids,
-not display text"*, so each hit is resolved via `mi_get_track()`/
-`mi_get_feed()` into `album_guid`/`track_guid` + title/subtitle),
-`search_hit_key()` (pro **3324**), the `SEARCH_*` constants (pro **217-221**;
-standard has none), the nonce (pro **2582**), and the box UI pattern from
-`render_search_ui()` (pro **3289**). Differences for the generator:
-- **Admin-only endpoint** - `wp_ajax_v4v_musiclink_search` with **no
-  `nopriv` twin**, gated by `current_user_can( 'manage_options' )` +
-  nonce. Pro's relay needs a per-IP rate limit precisely because its
-  nonces print on public pages; the generator's never do.
-- **No front-end search mode** - README:22 stays true; standard's
-  visitor-facing behaviour remains the usage message. This search exists
-  only in the admin builder.
+**Re-evaluation against the current standard (2026-10-05, Resolver
+1.22.27) - all former line refs were stale after O15/O16/O17/O21;
+relocated by symbol:**
+- `MI_ROOT`/`MI_API_BASE` std **87-88** (was 101-102), `cache_row_hash`
+  **704**, `get_cached_fountain_url` **743**, `is_valid_stored_url`
+  **756**, Cache-tab `Album GUID` header **801** (columns) / **1001**
+  (table), `handle_update_cache_row` **1151** (nonce
+  `v4v_musiclink_update_cache_row`, `manage_options`,
+  `CACHE_EDIT_COLUMNS` whitelist, `esc_url_raw` +
+  `is_valid_stored_url( $url, 'fountain' )` = https-only, fountain.fm
+  exact or subdomain), `guard_guid` **1456**, `$unexpected` whitelist
+  **1466** (`album`/`track`/`header` only), `mi_get_feed` **1666** /
+  `mi_get_track` **1689**, `mi_store_mi_fields` **1798**, `row_has_mi`
+  **1856**, `mi_api_get` **2024**, ctor hook block **172-180**,
+  inline-script pattern (`enqueue_assets`) **1278-1281** (src-false
+  handle + `wp_add_inline_script`).
+- **Schema permits a fountain-only row**: every MI column is
+  `NOT NULL DEFAULT ''`, `mi_updated_at DATETIME NULL`, `fountain_url
+  TEXT NOT NULL`, `fountain_updated_at DATETIME NOT NULL` (CREATE TABLE
+  std 665-679). `row_has_mi()` (1856) is false for such a row, so the
+  first front-end render takes the blocking MI fetch and
+  `mi_store_mi_fields()` (1798) never touches the fountain half on
+  duplicate - the admin's link survives while MI data backfills. The
+  block's fountain field therefore works before, without, or after Music
+  Index data.
+- Standard still has **zero** editor/REST/ajax code (no
+  `enqueue_block_editor_assets`, `rest_api_init`, `wp_ajax_*`,
+  `registerBlockType`) and the project has **no build tooling** (no
+  package.json) - the block must be plain JS (`wp.element.createElement`)
+  shipped as inline script inside the single PHP file.
 
-**Cache write - reuse, don't reinvent:** `mi_store_mi_fields()` std
-**2411-2437** is the existing `INSERT … ON DUPLICATE KEY UPDATE` upsert
-keyed by `cache_row_hash()`, stamping titles/artist/art + `mi_updated_at`
-and invalidating `row_memo`; the chosen hit's detail payload feeds it
-directly (kind `track` or `feed`). No Fountain work happens at choice time.
+**Decisions (2026-10-05, supersedes the sidebar-builder plan):**
+1. Placement, amended: a **custom block** (`v4v-musiclink/musiclink`,
+   registered via `enqueue_block_editor_assets`) whose **block settings
+   pane** holds all controls - search, header select, fountain field.
+   The PluginSidebar/`registerPlugin` builder, the copy button and the
+   "insert at caret" flow are dropped; the block itself appears in the
+   inserter and the shortcode text lives in the post content. Nothing
+   loads on the front end; no settings-screen box, no classic-editor UI
+   (the classic-editor half of the old decision stands). The optional
+   per-row Cache-tab "copy shortcode" action stays out of scope unless
+   later requested.
+2. Header control: **3-state select - "Site setting" (default), "Always
+   Show", "Always Hide"** - Site setting OMITS the attribute entirely
+   (render()'s existing absent/unrecognized fallback = the admin
+   "Release header" setting), Always Show emits `header="true"`, Always
+   Hide emits `header="false"`. No change to the shortcode attribute
+   contract.
+3. Fountain link: **no attribute** (point 3 of the re-plan; O18 stays
+   independent). The inspector field is a live view of the cache row:
+   `GET` on guid change loads `fountain_url`; change (on blur) `PUT`s it
+   back debounced-free with a Saved/error indicator. Validated with the
+   Cache-tab rules (`esc_url_raw` + `is_valid_stored_url(..., 'fountain')`);
+   empty value clears the cell (mirrors the Cache tab's clear). Row
+   exists -> UPDATE `fountain_url` + `fountain_updated_at` only (never
+   the MI half, same column discipline as `handle_update_cache_row`);
+   no row -> minimal INSERT (`lookup_hash` + guids + link +
+   `fountain_updated_at = current_time('mysql')`, MI columns `''`,
+   `mi_updated_at = NULL`) so the first render backfills MI as above.
+   The field is disabled until both guids are set; two blocks holding
+   the same guids read/write the same cell (last write wins - accepted).
 
-**Sites (standard only, per request):**
-- Builder home (per decision 1): block-editor sidebar registered from
-  `enqueue_block_editor_assets` - no precedent in this plugin (zero
-  editor code today): `registerPlugin` + `PluginSidebar` (+ More-menu
-  item) in a small admin-only script; enqueue gate = block editor only.
-- Optional extra: per-row "copy shortcode" action on the Cache tab
-  (std ~1172 row), which already renders both GUIDs.
-- No settings-screen box, no classic-editor Quicktags/media button
-  (decision 1) - classic-editor posts simply have no builder UI.
-- Clipboard pattern to reuse: Pro's share button
-  (`v4v-musiclink-pro-share-btn`, pro **2908-2923** -
-  `navigator.clipboard.writeText()` with a transient "copied" label);
-  standard has no clipboard code yet.
-- The builder must emit only whitelisted attribute names (std 1636/1637)
-  and will gain `fountain` (O18) once that ships.
+**Search - port from Pro, editor-only REST swap:**
+- Data layer, unchanged from the old plan: `mi_search_hits()` (pro
+  **3301** - cursor batches of `/search?q=&limit=`, per-query transient,
+  dedupe, relevance order), `search_hit_key()` (pro **3271**), the
+  `SEARCH_*` constants (pro **218-222**: `SEARCH_PER_PAGE` 8,
+  `SEARCH_BATCH_LIMIT` 100, `SEARCH_MAX_BATCHES` 3, `SEARCH_CACHE_SCHEMA`
+  2, `SEARCH_CACHE_TTL` 1 h - standard has none), and the guid->display
+  resolution loop from `ajax_search()` (pro **3415+**, its docblock:
+  hits carry guids only). `render_search_ui()` (pro **3236**) is NOT
+  ported - its front-end box has no role in the inspector.
+- Transport: **REST, not admin-ajax** - a new `v4v-musiclink/v1`
+  namespace with `permission_callback` = `manage_options` only, no
+  `nopriv` twin and no rate limiter (Pro needs both because its nonce
+  prints on public pages; the editor route never does). `wp.apiFetch`
+  carries the editor's REST nonce for free. Routes: `GET .../search?q=&page=`
+  (payload shape mirrors ajax_search: `results[{album_guid, track_guid,
+  title, subtitle}]`, `page`, `per_page`, `has_more`) and
+  `GET`/`PUT .../row?album=&track=` for the fountain field (GET returns
+  `{has_row, fountain_url, album_title, track_title, artist}`; PUT takes
+  `{album, track, fountain_url}` and returns the saved state or a 400
+  with the validation error).
+- No front-end search mode - README's "no visitor-facing search" note
+  stays true; the route is admin-editor-only.
 
-**Decisions (2026-10-05):**
-1. Placement: **block-editor sidebar**. The builder lives in the
-   Gutenberg post editor: `enqueue_block_editor_assets` registers a
-   small admin-only script (`registerPlugin` + `PluginSidebar`, plus the
-   More-menu item), no settings-screen box and no classic-editor UI; the
-   optional per-row Cache-tab "copy shortcode" action stays an extra
-   only if later requested. Nothing loads on the front end.
-2. Header control: a **3-state select - "Site setting" (default),
-   "Always Show", "Always Hide"** - where Site setting OMITS the
-   attribute entirely (render()'s existing absent/unrecognized fallback
-   = the admin "Release header" setting), Always Show emits
-   `header="true"`, Always Hide emits `header="false"`. No change to the
-   shortcode attribute contract. The `fountain` attribute (O18) joins
-   the builder when that ships.
+**Sites (standard only):**
+- Ctor **172-180**: add `rest_api_init` (route registration) and
+  `enqueue_block_editor_assets` (script + config) actions.
+- New REST callbacks as public methods (harness-callable):
+  `rest_permission()`, `rest_search()`, `rest_get_row()`,
+  `rest_update_row()`; the row PUT reuses `cache_table()`,
+  `cache_row_hash()`, `is_valid_stored_url()` and the fountain column
+  discipline of `handle_update_cache_row()` **1151**.
+- Editor script: inline JS attached to the core `wp-blocks` handle (or
+  a src-false `v4v-musiclink-block` handle + `wp_add_inline_script`,
+  mirroring `enqueue_assets()` **1278-1281**) - deliberately src-false
+  so the single-file convention holds and `bump-version.sh`'s
+  `wp_register_script( '...', false, array(), 'x.y.z' )` sed keeps
+  working; i18n/config strings passed as a JSON `before`-inline from
+  PHP so no JS translation files exist.
+- Block JS (plain `createElement`, deps `wp-blocks`, `wp-block-editor`,
+  `wp-components`, `wp-element`, `wp-i18n`, `wp-api-fetch`):
+  attributes `album`, `track`, `header` ('site'|'true'|'false');
+  `edit()` = inspector controls + a simple selected-state preview;
+  `save()` = RawHTML shortcode string, track/header attributes omitted
+  when empty/site, only whitelisted names ever emitted.
+- Optional extra (out of scope unless asked): Cache-tab per-row "copy
+  shortcode" action reusing the GUID cells already in the row.
 
-**Plan sketch:** block-editor sidebar - a title-text search input
-(debounced; query via an admin-only endpoint - REST route or
-admin-ajax, `manage_options` + nonce - proxying `mi_search_hits()`,
-each guid-only hit resolved server-side to display text), a results list
-whose chosen row fills the builder's guid fields **and upserts the cache
-row via `mi_store_mi_fields()`**, the 3-state header select, a
-live-assembled `[musiclink …]` preview, a copy button ported from the
-Pro share pattern (`navigator.clipboard.writeText()` + transient
-"copied" label) and/or insertion as a `core/shortcode` block at the
-caret, client-side hints for the 256-byte cap and unknown attribute
-names; optionally a "copy shortcode" action on Cache-tab rows reusing
-the GUID cells already in the row; harness assertions that AJAX/REST
-rejects unauthenticated/cross-site calls, only whitelisted attribute
-names can appear in the emitted string (Site setting must omit `header`
-rather than emit a sentinel value), and a chosen result lands as a cache
-row with `fountain_url = ''`; README usage line updated. The mechanics
-were explained to the user 2026-10-05 (registration, search flow,
-selection + cache write, insert-vs-copy, security model).
+**Plan sketch (ordered):**
+1. PHP: `SEARCH_*` constants + port `search_hit_key()`/`mi_search_hits()`
+   (rename internals to std's text domain; keep `HOUR_IN_SECONDS`
+   usage - already loaded by WP).
+2. PHP: REST namespace `v4v-musiclink/v1` - permission gate, search
+   route (resolve loop ported from `ajax_search()` minus nonce,
+   rate-limit and `wp_send_json_*`; return `WP_REST_Response`/`WP_Error`),
+   row GET, row PUT (validate, update-or-create as in Decision 3,
+   `unset( $this->row_memo[ $hash ] )` after write like
+   `mi_store_mi_fields()` does).
+3. PHP: `enqueue_block_editor_assets` - register config/i18n inline +
+   block JS inline; gate on `current_user_can( 'manage_options' )` (and
+   `get_current_screen()->is_block_editor( ... )` or the hook itself is
+   block-editor-only).
+4. JS: block registration - attributes, inspector (debounced search
+   input with "load more" honoring `has_more`, results list, 3-state
+   header select, fountain field with GET-on-guid-change + PUT-on-blur +
+   Saved/error state), RawHTML save building only
+   `album`/`track`/`header`.
+5. Harness: new `tmp/test_block_rest.php` (15th file; picked up by the
+   release glob) - model its WP/HTTP stub layer on
+   `tmp/test_stored_links.php`: route registration recorded; permission
+   callback refuses without `manage_options`; search returns canned
+   upstream batches (dedupe/page shape) and never runs on the front-end
+   path; row GET on missing/existing row; row PUT accepts a valid
+   fountain.fm https URL (updates only the fountain half, stamps
+   `fountain_updated_at`, leaves `mi_updated_at`/titles alone), clears
+   on empty, rejects non-https / non-fountain hosts with 400, and
+   creates the minimal row (correct `lookup_hash`, `mi_updated_at`
+   NULL) when absent; `row_memo` invalidated after PUT.
+6. Manual editor smoke test (no JS test infra): insert block, search ->
+   pick, header select, fountain field round-trip appears on the Cache
+   tab and renders on the front end, shortcode text in code editor
+   looks right.
+7. Docs: README gains a short "Block editor (standard)" subsection under
+   usage (search in the inserter, values in the settings pane, fountain
+   field = the cache row's link); plugin-header DevTools note optional;
+   CHANGELOG "Added" entry at release (block + REST routes, admin-only).
+
+**Verification (done 2026-10-06):** `./php/php -l` clean on both files;
+13 offline harnesses pass - new `tmp/test_block_rest.php` 62 (routes +
+permission gate, search shape/dedupe/has_more/resolution side-effects,
+row GET/PUT validation, fountain-half-only upsert, minimal-row creation,
+memo invalidation, enqueue gate, no-`fountain="` pin), stored_links 358,
+app_launch 114, log_limits 93, search_pagination 44, canonical 36,
+fix 84, fountain_path 30, log_scope 29, v4vmusic 28, mi_ttl 26,
+missing_params 12; candidate/case still 404 (O9, known); live 10/10;
+e2e 14/14; block JS balanced-checked (no JS runtime in toolchain - the
+manual editor smoke test in step 6 is still owed by the user).
+
+**Interactions:** O18 (shortcode `fountain` attribute) no longer blocks
+or is blocked by this - the block deliberately does not use it; if O18
+ever ships, the block still need not emit it (the field covers the
+authoring case). O14/O15/O21 behaviour all observed as-is: empty
+`fountain_url` -> search fallback until the field (or Cache tab) fills
+it.
 
 ---
 

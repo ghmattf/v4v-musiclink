@@ -20,7 +20,18 @@ Usage:
 [musiclink album="{album-guid}" track="{track-guid}" header="false"]
 ```
 
-A bare `[musiclink]` (or one with unexpected attributes) shows a usage message instead of guessing at intent. `header="true"` / `header="false"` overrides the site-wide "Release header" setting for that instance. There is no URL-parameter or search UI mode in this version.
+A bare `[musiclink]` (or one with unexpected attributes) shows a usage message instead of guessing at intent. `header="true"` / `header="false"` overrides the site-wide "Release header" setting for that instance. There is no URL-parameter or front-end search UI mode in this version.
+
+### Block editor (standard only)
+
+For Gutenberg posts and pages, insert the **Music Link** block (administrators only). Its settings pane holds everything the shortcode accepts:
+
+- **Search Music Index** - type a title, pick a result; the album/track GUIDs are filled in and the release is cached (it appears on the Cache tab immediately, before it has ever been viewed on the front end).
+- **Fountain.fm link** - reads and writes the same `fountain_url` cell as the Cache tab's "Fountain.fm link" field, so every shortcode of that release shares one link. The value must be an `https` URL on fountain.fm (or empty for the search-fallback button); there is no `fountain=` attribute.
+- **Release header** - a three-state select: *Site setting* omits the attribute entirely (the site-wide setting applies), *Always Show* / *Always Hide* emit `header="true"` / `header="false"`.
+- **Release GUIDs** - the raw GUID fields, for pasting by hand.
+
+The block stores the assembled `[musiclink ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search and the link field are editor-only, behind `manage_options`.
 
 ## V4V Music Link Resolver Pro
 

@@ -137,6 +137,19 @@ class V4V_Music_Link_Resolver {
 		'art'      => 'image_url',
 	);
 
+	// Search pagination for the block-editor builder's Music Index search.
+	// Music Index caps `limit` at 100 and pages the rest behind opaque
+	// cursors, so a batch is at most SEARCH_BATCH_LIMIT rows and deeper
+	// results are reached by chaining; SEARCH_MAX_BATCHES bounds how many
+	// upstream calls one REST search request may trigger. Values mirror
+	// Pro's constants exactly; the per-query transient key is namespaced
+	// 'v' . SEARCH_CACHE_SCHEMA and lives only in this plugin's cache.
+	const SEARCH_PER_PAGE     = 8;
+	const SEARCH_BATCH_LIMIT  = 100;
+	const SEARCH_MAX_BATCHES  = 3;
+	const SEARCH_CACHE_SCHEMA = 2;
+	const SEARCH_CACHE_TTL    = HOUR_IN_SECONDS;
+
 	/**
 	 * HTTP status of the most recent mi_api_get() call (0 = transport
 	 * failure or an undecodable body). Lets mi_get_feed()/mi_get_track()
@@ -175,6 +188,10 @@ class V4V_Music_Link_Resolver {
 		add_action( 'admin_post_v4v_musiclink_update_cache_row', array( $this, 'handle_update_cache_row' ) );
 		add_action( 'admin_post_v4v_musiclink_delete_cache_row', array( $this, 'handle_delete_cache_row' ) );
 		add_action( 'admin_post_v4v_musiclink_clear_cache', array( $this, 'handle_clear_cache' ) );
+		// Block-editor builder (O19): editor-only REST routes for the
+		// settings-pane search/fountain field, and the block's inline JS.
+		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+		add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
 		// Background Music Index refreshes, after the page has gone out
 		// (priority 10 lets wp_ob_end_flush_all at priority 1 flush first).
 		add_action( 'shutdown', array( $this, 'run_queued_mi_refresh' ) );
@@ -1280,6 +1297,354 @@ class V4V_Music_Link_Resolver {
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
 
+	/**
+	 * Block-editor assets for the shortcode builder (O19): a src-less
+	 * handle carrying the block-editor dependencies, then the whole block
+	 * as one inline script. Deliberately src-false: the project ships no
+	 * .js files (single-file plugin convention) and there is no URL to
+	 * cache-bust, so the version argument stays false instead of a literal
+	 * that would drift from the plugin version. Admin editors only - the
+	 * block talks to the manage_options REST routes, so anyone else gets
+	 * nothing registered.
+	 */
+	public function enqueue_block_editor_assets() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		wp_register_script(
+			'v4v-musiclink-block',
+			false,
+			array( 'wp-blocks', 'wp-block-editor', 'wp-components', 'wp-element', 'wp-i18n', 'wp-api-fetch' ),
+			false,
+			true
+		);
+		wp_enqueue_script( 'v4v-musiclink-block' );
+		wp_add_inline_script( 'v4v-musiclink-block', $this->block_js() );
+	}
+
+	/**
+	 * The builder block itself, inlined as source (see
+	 * enqueue_block_editor_assets()). Plain wp.element.createElement - no
+	 * JSX and no build step - and no template literals, so the nowdoc
+	 * stays both build-free and interpolation-free.
+	 *
+	 * Attributes mirror the shortcode's whitelist exactly (album, track,
+	 * header): save() emits the raw [musiclink ...] string as the block's
+	 * content, so the front end runs the same single shortcode path it
+	 * always has. The Fountain link is NOT an attribute - it reads and
+	 * writes the cache row through the REST routes, which is why there is
+	 * no fountain= anywhere below (O18 stays independent).
+	 */
+	private function block_js() {
+		return <<<'V4VML'
+( function ( blocks, element, blockEditor, components, i18n, apiFetch ) {
+	'use strict';
+
+	var el = element.createElement;
+	var Fragment = element.Fragment;
+	var RawHTML = element.RawHTML;
+	var useState = element.useState;
+	var useEffect = element.useEffect;
+	var useRef = element.useRef;
+	var __ = i18n.__;
+	var InspectorControls = blockEditor.InspectorControls;
+	var PanelBody = components.PanelBody;
+	var TextControl = components.TextControl;
+	var SelectControl = components.SelectControl;
+	var Button = components.Button;
+	var Spinner = components.Spinner;
+	var Notice = components.Notice;
+
+	var NAMESPACE = '/v4v-musiclink/v1';
+
+	// Strip quotes and HTML-significant characters so a hand-typed guid
+	// can never break out of the attribute quotes in the saved string;
+	// the server re-checks via guard_guid()/sanitize_text_field anyway.
+	function clean_value( value ) {
+		return String( value === null || value === undefined ? '' : value )
+			.replace( /["'<>&]/g, '' )
+			.trim();
+	}
+
+	function build_shortcode( attributes ) {
+		var album = clean_value( attributes.album );
+		var track = clean_value( attributes.track );
+		var header = attributes.header || 'site';
+		if ( ! album ) {
+			return '';
+		}
+		var parts = [ 'album="' + album + '"' ];
+		if ( track ) {
+			parts.push( 'track="' + track + '"' );
+		}
+		// "Site setting" OMITS the attribute entirely - render()'s
+		// absent/unrecognized fallback is the admin Release header
+		// setting, so no sentinel value is ever emitted.
+		if ( 'true' === header || 'false' === header ) {
+			parts.push( 'header="' + header + '"' );
+		}
+		return '[musiclink ' + parts.join( ' ' ) + ']';
+	}
+
+	function error_message( err ) {
+		return ( err && err.message ) ? err.message : __( 'Request failed.', 'v4v-musiclink' );
+	}
+
+	function SearchPanel( props ) {
+		var queryState = useState( '' );
+		var query = queryState[0];
+		var setQuery = queryState[1];
+		var resultsState = useState( [] );
+		var results = resultsState[0];
+		var setResults = resultsState[1];
+		var pageState = useState( 1 );
+		var page = pageState[0];
+		var setPage = pageState[1];
+		var moreState = useState( false );
+		var has_more = moreState[0];
+		var setHasMore = moreState[1];
+		var loadingState = useState( false );
+		var loading = loadingState[0];
+		var setLoading = loadingState[1];
+		var errorState = useState( '' );
+		var error = errorState[0];
+		var setError = errorState[1];
+		var timer = useRef( null );
+
+		function do_search( q, p, append ) {
+			setLoading( true );
+			setError( '' );
+			apiFetch( {
+				path: NAMESPACE + '/search?q=' + encodeURIComponent( q ) + '&page=' + p
+			} ).then( function ( data ) {
+				setResults( append
+					? function ( prev ) { return prev.concat( data.results ); }
+					: data.results );
+				setHasMore( !! data.has_more );
+				setPage( p );
+				setLoading( false );
+			} ).catch( function ( err ) {
+				setLoading( false );
+				setError( error_message( err ) );
+			} );
+		}
+
+		useEffect( function () {
+			if ( timer.current ) {
+				window.clearTimeout( timer.current );
+			}
+			var q = query.trim();
+			if ( ! q ) {
+				setResults( [] );
+				setHasMore( false );
+				return undefined;
+			}
+			timer.current = window.setTimeout( function () {
+				do_search( q, 1, false );
+			}, 300 );
+			return function () {
+				if ( timer.current ) {
+					window.clearTimeout( timer.current );
+				}
+			};
+		}, [ query ] );
+
+		function pick( hit ) {
+			props.setAttributes( {
+				album: hit.album_guid,
+				track: hit.track_guid || ''
+			} );
+		}
+
+		return el( Fragment, null,
+			el( TextControl, {
+				label: __( 'Search by title', 'v4v-musiclink' ),
+				value: query,
+				placeholder: __( 'Song or album title...', 'v4v-musiclink' ),
+				onChange: setQuery
+			} ),
+			error ? el( Notice, { status: 'error', isDismissible: false }, error ) : null,
+			loading ? el( Spinner ) : null,
+			el( 'ul', { className: 'v4v-ml-results' },
+				results.map( function ( hit ) {
+					return el( 'li', { key: hit.album_guid + '|' + ( hit.track_guid || '' ) },
+						el( Button, { className: 'v4v-ml-hit', onClick: function () { pick( hit ); } },
+							el( 'strong', null, hit.title ),
+							hit.subtitle ? el( 'span', { className: 'v4v-ml-sub' }, ' \u2014 ' + hit.subtitle ) : null
+						)
+					);
+				} )
+			),
+			has_more && ! loading
+				? el( Button, { onClick: function () { do_search( query.trim(), page + 1, true ); } },
+					__( 'Load more', 'v4v-musiclink' ) )
+				: null
+		);
+	}
+
+	function FountainPanel( props ) {
+		var album = props.album;
+		var track = props.track;
+		var valueState = useState( '' );
+		var value = valueState[0];
+		var setValue = valueState[1];
+		var savedState = useState( '' );
+		var saved = savedState[0];
+		var setSaved = savedState[1];
+		var statusState = useState( 'idle' );
+		var status = statusState[0];
+		var setStatus = statusState[1];
+		var errorState = useState( '' );
+		var error = errorState[0];
+		var setError = errorState[1];
+
+		useEffect( function () {
+			if ( ! album ) {
+				setValue( '' );
+				setSaved( '' );
+				setStatus( 'idle' );
+				return undefined;
+			}
+			setStatus( 'loading' );
+			apiFetch( {
+				path: NAMESPACE + '/row?album=' + encodeURIComponent( album ) +
+					'&track=' + encodeURIComponent( track || '' )
+			} ).then( function ( data ) {
+				setValue( data.fountain_url || '' );
+				setSaved( data.fountain_url || '' );
+				setStatus( 'idle' );
+				setError( '' );
+			} ).catch( function ( err ) {
+				setStatus( 'error' );
+				setError( error_message( err ) );
+			} );
+		}, [ album, track ] );
+
+		function persist( next ) {
+			if ( next === saved ) {
+				return;
+			}
+			setStatus( 'saving' );
+			setError( '' );
+			apiFetch( {
+				path: NAMESPACE + '/row',
+				method: 'PUT',
+				data: { album: album, track: track || '', fountain_url: next }
+			} ).then( function ( data ) {
+				setValue( data.fountain_url || '' );
+				setSaved( data.fountain_url || '' );
+				setStatus( 'saved' );
+			} ).catch( function ( err ) {
+				setStatus( 'error' );
+				setError( error_message( err ) );
+			} );
+		}
+
+		return el( Fragment, null,
+			el( TextControl, {
+				label: __( 'Fountain.fm link', 'v4v-musiclink' ),
+				help: __(
+					'Stored in this release\'s cache row (the same field as the Cache tab\'s "Fountain.fm link"), so it is shared by every shortcode of this release. Leave empty to render the search fallback.',
+					'v4v-musiclink'
+				),
+				value: value,
+				placeholder: 'https://fountain.fm/...',
+				disabled: ! album || 'loading' === status || 'saving' === status,
+				onChange: setValue,
+				onBlur: function () { persist( value ); }
+			} ),
+			'saving' === status ? el( Spinner ) : null,
+			'saved' === status
+				? el( 'p', { className: 'v4v-ml-saved' }, __( 'Saved to the cache row.', 'v4v-musiclink' ) )
+				: null,
+			error ? el( Notice, { status: 'error', isDismissible: false }, error ) : null,
+			! album
+				? el( 'p', { className: 'v4v-ml-hint' }, __(
+					'Pick a search result or enter GUIDs first - the link lives on the cache row for that release.',
+					'v4v-musiclink'
+				) )
+				: null
+		);
+	}
+
+	blocks.registerBlockType( 'v4v-musiclink/musiclink', {
+		title: __( 'Music Link', 'v4v-musiclink' ),
+		description: __(
+			'Insert a [musiclink] shortcode; search Music Index and edit every value from this block\'s settings pane.',
+			'v4v-musiclink'
+		),
+		icon: 'format-audio',
+		category: 'widgets',
+		attributes: {
+			album: { type: 'string', default: '' },
+			track: { type: 'string', default: '' },
+			header: { type: 'string', default: 'site' }
+		},
+		edit: function ( props ) {
+			var shortcode = build_shortcode( props.attributes );
+			return el( Fragment, null,
+				el( InspectorControls, null,
+					el( PanelBody, { title: __( 'Search Music Index', 'v4v-musiclink' ), initialOpen: true },
+						el( SearchPanel, {
+							attributes: props.attributes,
+							setAttributes: props.setAttributes
+						} )
+					),
+					el( PanelBody, { title: __( 'Fountain.fm link', 'v4v-musiclink' ), initialOpen: true },
+						el( FountainPanel, {
+							album: props.attributes.album,
+							track: props.attributes.track
+						} )
+					),
+					el( PanelBody, { title: __( 'Release header', 'v4v-musiclink' ), initialOpen: false },
+						el( SelectControl, {
+							label: __( 'Header', 'v4v-musiclink' ),
+							value: props.attributes.header,
+							options: [
+								{ label: __( 'Site setting', 'v4v-musiclink' ), value: 'site' },
+								{ label: __( 'Always Show', 'v4v-musiclink' ), value: 'true' },
+								{ label: __( 'Always Hide', 'v4v-musiclink' ), value: 'false' }
+							],
+							onChange: function ( next ) { props.setAttributes( { header: next } ); }
+						} ),
+						el( 'p', { className: 'v4v-ml-hint' }, __(
+							'Site setting omits the attribute and follows the plugin\'s Release header setting.',
+							'v4v-musiclink'
+						) )
+					),
+					el( PanelBody, { title: __( 'Release GUIDs', 'v4v-musiclink' ), initialOpen: false },
+						el( TextControl, {
+							label: __( 'Album GUID', 'v4v-musiclink' ),
+							value: props.attributes.album,
+							onChange: function ( next ) { props.setAttributes( { album: clean_value( next ) } ); }
+						} ),
+						el( TextControl, {
+							label: __( 'Track GUID', 'v4v-musiclink' ),
+							value: props.attributes.track,
+							help: __( 'Optional for album-only links; each value is limited to 256 bytes.', 'v4v-musiclink' ),
+							onChange: function ( next ) { props.setAttributes( { track: clean_value( next ) } ); }
+						} )
+					)
+				),
+				el( 'div', { className: 'v4v-ml-block' },
+					shortcode
+						? el( 'code', null, shortcode )
+						: el( 'p', null, __(
+							'Search by title in the settings pane, or paste the release GUIDs.',
+							'v4v-musiclink'
+						) )
+				)
+			);
+		},
+		save: function ( props ) {
+			return el( RawHTML, null, build_shortcode( props.attributes ) );
+		}
+	} );
+} )( window.wp.blocks, window.wp.element, window.wp.blockEditor, window.wp.components, window.wp.i18n, window.wp.apiFetch );
+V4VML;
+	}
+
 	private function inline_css() {
 		return '
 			.v4v-musiclink { max-width: 480px; margin: 1.5em 0; }
@@ -2054,6 +2419,341 @@ JS;
 			return null;
 		}
 		return $body;
+	}
+
+	/**
+	 * Stable identity for one search hit: type|entity_id|album_guid, or ''
+	 * when the hit is unusable (no type/id, or a track whose parent album
+	 * guid is missing). Used for de-duplication across cursor batches.
+	 * Ported unchanged from Pro's search_hit_key().
+	 */
+	private function search_hit_key( $hit ) {
+		if ( empty( $hit['entity_type'] ) || empty( $hit['entity_id'] ) ) {
+			return '';
+		}
+
+		// Track-type hits carry a separate feed_guid (their parent album)
+		// and need it to fetch details. Feed/album-type hits have no
+		// feed_guid at all - entity_id IS the album's own guid.
+		$album_guid = ( 'track' === $hit['entity_type'] ) ? ( isset( $hit['feed_guid'] ) ? $hit['feed_guid'] : '' ) : $hit['entity_id'];
+		if ( 'track' === $hit['entity_type'] && '' === $album_guid ) {
+			return ''; // Can't resolve a track without knowing its album.
+		}
+
+		return $hit['entity_type'] . '|' . $hit['entity_id'] . '|' . $album_guid;
+	}
+
+	/**
+	 * Returns the accumulated, de-duplicated hits for a query in Music
+	 * Index's relevance order, fetching more cursor batches only when fewer
+	 * than $needed hits are already known.
+	 *
+	 * The accumulated list is stored in a per-query transient, so it only
+	 * ever grows by appending: a hit keeps the same index for the lifetime
+	 * of the cache, which is what makes page boundaries stable and lets the
+	 * browser walk backwards for free. Relevance order is exactly the order
+	 * Music Index returned - nothing is re-sorted here.
+	 *
+	 * Ported unchanged from Pro's mi_search_hits(); only the transient
+	 * namespace differs (this plugin's own 'v' . SEARCH_CACHE_SCHEMA key).
+	 *
+	 * @return array{hits: array, has_more: bool} De-duplicated hits, and
+	 *         whether a further batch is known to exist behind the cursor.
+	 */
+	private function mi_search_hits( $query, $needed ) {
+		$cache_key = 'mi_search_hits_v' . self::SEARCH_CACHE_SCHEMA . '_' . md5( $query );
+		$state     = get_transient( $cache_key );
+		if (
+			! is_array( $state )
+			|| ! isset( $state['hits'], $state['has_more'], $state['cursor'] )
+			|| ! is_array( $state['hits'] )
+		) {
+			$state = array(
+				'hits'     => array(),
+				'seen'     => array(),
+				'cursor'   => '',
+				'has_more' => true, // Assume more until a batch says otherwise.
+			);
+		}
+
+		$batches = 0;
+		while (
+			count( $state['hits'] ) < $needed
+			&& $state['has_more']
+			&& $batches < self::SEARCH_MAX_BATCHES
+		) {
+			$path = '/search?q=' . rawurlencode( $query ) . '&limit=' . self::SEARCH_BATCH_LIMIT;
+			if ( '' !== $state['cursor'] ) {
+				$path .= '&cursor=' . rawurlencode( $state['cursor'] );
+			}
+
+			$body   = $this->mi_api_get( $path );
+			$batches++;
+
+			if ( empty( $body['data'] ) || ! is_array( $body['data'] ) ) {
+				// An empty batch ends the chain even when the response still
+				// claims has_more - a no-match query returns zero rows with
+				// has_more=true, and trusting it would loop forever.
+				$state['has_more'] = false;
+				break;
+			}
+
+			foreach ( $body['data'] as $hit ) {
+				$key = $this->search_hit_key( $hit );
+				if ( '' === $key || isset( $state['seen'][ $key ] ) ) {
+					continue;
+				}
+				$state['seen'][ $key ] = true;
+				$state['hits'][]       = $hit;
+			}
+
+			$cursor  = isset( $body['pagination']['cursor'] ) ? (string) $body['pagination']['cursor'] : '';
+			$has_more = ! empty( $body['pagination']['has_more'] ) && '' !== $cursor;
+			if ( '' === $cursor || $cursor === $state['cursor'] ) {
+				$has_more = false; // No progress possible, stop regardless.
+			}
+			$state['cursor']   = $cursor;
+			$state['has_more'] = $has_more;
+		}
+
+		set_transient( $cache_key, $state, self::SEARCH_CACHE_TTL );
+
+		return array(
+			'hits'     => $state['hits'],
+			'has_more' => $state['has_more'],
+		);
+	}
+
+	/**
+	 * Registers the editor-only REST routes backing the block-editor
+	 * shortcode builder: Music Index search, and cache-row fountain-link
+	 * read/write for the settings pane's link field. Admin-only (see
+	 * rest_permission()) - standard never exposes a public search
+	 * endpoint, unlike Pro's nopriv AJAX relay, so none of Pro's nonce
+	 * printing or per-IP rate limiting applies here.
+	 */
+	public function register_rest_routes() {
+		register_rest_route( 'v4v-musiclink/v1', '/search', array(
+			'methods'             => 'GET',
+			'callback'            => array( $this, 'rest_search' ),
+			'permission_callback' => array( $this, 'rest_permission' ),
+		) );
+
+		register_rest_route( 'v4v-musiclink/v1', '/row', array(
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'rest_get_row' ),
+				'permission_callback' => array( $this, 'rest_permission' ),
+			),
+			array(
+				'methods'             => 'PUT',
+				'callback'            => array( $this, 'rest_update_row' ),
+				'permission_callback' => array( $this, 'rest_permission' ),
+			),
+		) );
+	}
+
+	/**
+	 * Permission gate shared by every route above: administrators only.
+	 * The block's script is never enqueued for anyone else either (see
+	 * enqueue_block_editor_assets()), so an ordinary editor never even
+	 * sees the UI that would call these.
+	 */
+	public function rest_permission() {
+		return current_user_can( 'manage_options' )
+			? true
+			: new WP_Error(
+				'v4v_musiclink_forbidden',
+				__( 'Only administrators may use the Music Link block endpoints.', 'v4v-musiclink' ),
+				array( 'status' => 403 )
+			);
+	}
+
+	/**
+	 * GET /v4v-musiclink/v1/search?q=&page= - the settings pane's search
+	 * box. Queries Music Index via mi_search_hits(), then resolves each
+	 * hit's display text (search results carry guids only) through
+	 * mi_get_track()/mi_get_feed() - which also upserts those releases'
+	 * cache rows, same as Pro's relay, so picked hits already show up on
+	 * the Cache tab. Pagination mirrors ajax_search(): relevance order,
+	 * no grand total (the upstream API offers only opaque cursors), just
+	 * page/per_page/has_more. Returns the payload array; WP's REST server
+	 * wraps it as JSON.
+	 */
+	public function rest_search( $request ) {
+		$query = sanitize_text_field( (string) $request->get_param( 'q' ) );
+		$page  = max( 1, absint( $request->get_param( 'page' ) ) );
+		$per_page = self::SEARCH_PER_PAGE;
+
+		$payload = array(
+			'results'  => array(),
+			'page'     => $page,
+			'per_page' => $per_page,
+			'has_more' => false,
+		);
+
+		if ( '' === $query ) {
+			return $payload;
+		}
+
+		$offset = ( $page - 1 ) * $per_page;
+		$search = $this->mi_search_hits( $query, $offset + $per_page );
+		$hits   = $search['hits'];
+
+		// De-duplicate again over just this page as a cheap guard: a stale
+		// cache written by an older schema could otherwise leak repeats.
+		$seen = array();
+
+		foreach ( array_slice( $hits, $offset, $per_page ) as $hit ) {
+			$key = $this->search_hit_key( $hit );
+			if ( '' === $key || isset( $seen[ $key ] ) ) {
+				continue;
+			}
+			$seen[ $key ] = true;
+
+			$album_guid_for_hit = ( 'track' === $hit['entity_type'] ) ? ( isset( $hit['feed_guid'] ) ? $hit['feed_guid'] : '' ) : $hit['entity_id'];
+
+			if ( 'track' === $hit['entity_type'] ) {
+				$track_data = $this->mi_get_track( $album_guid_for_hit, $hit['entity_id'] );
+				if ( ! $track_data ) {
+					continue;
+				}
+				$payload['results'][] = array(
+					'album_guid' => $album_guid_for_hit,
+					'track_guid' => $hit['entity_id'],
+					'title'      => $track_data['title'],
+					'subtitle'   => trim( sprintf(
+						/* translators: 1: album title, 2: artist name */
+						__( 'from %1$s · %2$s', 'v4v-musiclink' ),
+						$track_data['album_title'],
+						$track_data['artist']
+					), ' ·' ),
+				);
+			} else {
+				// Anything not explicitly a track (e.g. "feed"/"album") is
+				// treated as an album-level hit.
+				$feed_data = $this->mi_get_feed( $album_guid_for_hit );
+				if ( ! $feed_data ) {
+					continue;
+				}
+				$payload['results'][] = array(
+					'album_guid' => $album_guid_for_hit,
+					'track_guid' => null,
+					'title'      => $feed_data['title'],
+					'subtitle'   => $feed_data['artist']
+						? sprintf( __( 'Album by %s', 'v4v-musiclink' ), $feed_data['artist'] )
+						: __( 'Album', 'v4v-musiclink' ),
+				);
+			}
+		}
+
+		// Another page exists if we already hold hits beyond this one, or if
+		// the cursor says another batch is fetchable. An empty page is always
+		// the last one, so a request past the end can't offer "Next".
+		$payload['has_more'] = ( ! $payload['results'] )
+			? false
+			: ( isset( $hits[ $offset + $per_page ] ) || $search['has_more'] );
+
+		return $payload;
+	}
+
+	/**
+	 * GET /v4v-musiclink/v1/row?album=&track= - the settings pane's
+	 * fountain field loads the pair's cached link (plus display text for
+	 * context) from the cache row, or has_row=false when the release has
+	 * never been cached. Album guid is required; track may be empty for
+	 * album-only shortcodes.
+	 */
+	public function rest_get_row( $request ) {
+		$album = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'album' ) ) );
+		$track = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'track' ) ) );
+
+		if ( '' === $album ) {
+			return new WP_Error(
+				'v4v_musiclink_bad_request',
+				__( 'An album guid is required.', 'v4v-musiclink' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$row = $this->cache_get_row( $album, $track );
+
+		return array(
+			'has_row'      => (bool) $row,
+			'fountain_url' => ( $row && is_string( $row->fountain_url ) ) ? $row->fountain_url : '',
+			'album_title'  => $row ? $row->album_title : '',
+			'track_title'  => $row ? $row->track_title : '',
+			'artist'       => $row ? $row->artist : '',
+		);
+	}
+
+	/**
+	 * PUT /v4v-musiclink/v1/row - the settings pane's fountain field
+	 * writes the pair's cached link. Same rules as the Cache-tab editor
+	 * (handle_update_cache_row()): https fountain.fm URL or empty to
+	 * clear; the write touches ONLY the fountain half - titles, artist,
+	 * art and mi_updated_at are never in the statement. A single
+	 * INSERT ... ON DUPLICATE KEY UPDATE covers both cases: an existing
+	 * row gets its two fountain columns refreshed, a missing row is
+	 * created with empty MI columns and mi_updated_at NULL, so the first
+	 * render takes the blocking fetch path and backfills the metadata
+	 * while this link stays put. Empty URL with no row writes nothing -
+	 * blank rows are never created.
+	 */
+	public function rest_update_row( $request ) {
+		$album = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'album' ) ) );
+		$track = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'track' ) ) );
+		$url   = esc_url_raw( trim( (string) $request->get_param( 'fountain_url' ) ) );
+
+		if ( '' === $album ) {
+			return new WP_Error(
+				'v4v_musiclink_bad_request',
+				__( 'An album guid is required.', 'v4v-musiclink' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( '' !== $url && ! $this->is_valid_stored_url( $url, 'fountain' ) ) {
+			return new WP_Error(
+				'v4v_musiclink_bad_url',
+				__( 'The Fountain.fm link must be an https URL on fountain.fm.', 'v4v-musiclink' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		global $wpdb;
+		$table = $this->cache_table();
+		$hash  = $this->cache_row_hash( $album, $track );
+		$row   = $this->cache_get_row( $album, $track );
+
+		if ( $row || '' !== $url ) {
+			$wpdb->query(
+				$wpdb->prepare(
+					"INSERT INTO {$table}
+						(lookup_hash, album_guid, track_guid, album_title, track_title, artist, image_url, fountain_url, fountain_updated_at, mi_updated_at)
+					VALUES (%s, %s, %s, '', '', '', '', %s, %s, NULL)
+					ON DUPLICATE KEY UPDATE
+						fountain_url = VALUES(fountain_url),
+						fountain_updated_at = VALUES(fountain_updated_at)",
+					$hash,
+					$album,
+					$track,
+					$url,
+					current_time( 'mysql' )
+				)
+			);
+		}
+
+		unset( $this->row_memo[ $hash ] );
+		$row = $this->cache_get_row( $album, $track );
+
+		return array(
+			'has_row'      => (bool) $row,
+			'fountain_url' => ( $row && is_string( $row->fountain_url ) ) ? $row->fountain_url : '',
+			'album_title'  => $row ? $row->album_title : '',
+			'track_title'  => $row ? $row->track_title : '',
+			'artist'       => $row ? $row->artist : '',
+		);
 	}
 
 	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true ) {
