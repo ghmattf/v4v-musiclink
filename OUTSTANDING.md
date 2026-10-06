@@ -582,29 +582,13 @@ picks it.
 
 ---
 
-## O20. Live Music Index search harnesses get HTTP 404 "Server action not found."
-
-**Status: Open** (identified 2026-10-05; awaiting triage).
-
-**What:** `./php/php tmp/fountain_candidate_test.php` and
-`./php/php tmp/fountain_case_test.php` receive `HTTP 404`, body
-`Server action not found.` (24 bytes), from `https://api.musicindex.org`
-on every request - each was re-run once, and it reproduces with the
-previous release checked out too, so it is an upstream API-side routing
-change, independent of the DB-migration prune that shipped in
-Resolver 1.22.25 / Pro 1.20.31. `fountain_live_test` (Fountain side) still
-passes 20/20 and all 11 offline harnesses are green.
-
-**Plan sketch:** probe `https://api.musicindex.org/v1/...` by hand to see
-what the search endpoint expects now (method/path/headers vs the
-`mi_api_get()` / `mi_search_hits()` request shape in both plugins); if
-the path or verb moved, update the request builder in both plugins (plus
-any hard-coded paths inside the two harnesses) and re-run them.
-
----
-
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
+- **O20 live-harness 404s** (closed 2026-10-05): duplicate of O9 - the
+`fountain_candidate_test`/`fountain_case_test` 404s are stale hardcoded
+`next-action` fixtures against fountain.fm (the originally recorded
+`api.musicindex.org` host was wrong); O9's detect-don't-embed plan is
+the work. Re-open only to triage that plan.
 - **Fountain self-heal stays inline** (security review finding #5):
   declined 2026-09-24 - no refactor of the inline self-heal.
 - **Telegram stale preview** (investigated 2026-09-25): phafe.com serves
