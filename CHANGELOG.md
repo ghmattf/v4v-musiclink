@@ -3,6 +3,12 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.27] - 2026-10-05
+
+### Removed
+
+- **The standard plugin no longer discovers Fountain deep links itself** — automatic Fountain resolution is now Pro-only. Removed from the standard plugin: `fountain_resolve()` and the `fountain_try_resolve()` POST to `fountain.fm/search` (including the `V4V_MUSICLINK_FOUNTAIN_NEXT_ACTION` constant fallback), `fountain_autodetect_next_actions()` — the 15-minute-throttled chunk crawl and its `next-action` self-heal `update_option` writes — with `fountain_scan_chunks_for_actions()`, `fountain_negative_cache_ttl()` and its Fountain miss-caching transients, `extract_fountain_hit()`, `fountain_path_segment()`, `store_fountain_link()` with its write-on-hit call site in `render()` (and the `$last_fountain_status`/`$last_fountain_hits_parsed` properties), and the settings field "Fountain next-action header" with its `register_setting()` registration (the stale `v4v_musiclink_fountain_next_action` option value is left orphaned in the database — nothing reads it). The FAIL/SOFT miss-cache TTL constants stay: Music Index misses still use them. The standard plugin now never issues HTTP to fountain.fm: its Fountain button renders a deep link already stored on the cache row when one exists (manual Cache-tab entries and rows written by earlier versions), otherwise the quoted-search fallback added in 1.22.26 (or `fountain.fm/discover` when no title is known) — so Cache-tab editing is now the only way the standard version gains a deep link. All Music Index machinery, the confirm-first modal, launch logging and the rest of the render path are untouched; the Pro plugin (1.20.32) keeps resolution, negative caching and self-heal unchanged. README updated to split the Fountain row accordingly, and the harnesses reworked: `fountain_fix_test`/`test_fountain_path` pin the removed methods' absence, `test_stored_links` asserts the fallback/no-write shape for standard, the live Fountain test covers Pro only, and `probe_woman` (a standard-resolution probe) reports itself obsolete.
+
 ## Resolver (v4v-musiclink) — [1.22.26] - 2026-10-05
 
 ### Changed
