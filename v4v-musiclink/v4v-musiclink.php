@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver
  * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.26
+ * Version: 1.22.27
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1275,7 +1275,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.26', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.22.27', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
