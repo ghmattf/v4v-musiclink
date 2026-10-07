@@ -26,12 +26,15 @@ A bare `[musiclink]` (or one with unexpected attributes) shows a usage message i
 
 For Gutenberg posts and pages, insert the **Music Link** block (administrators only). Its settings pane holds everything the shortcode accepts:
 
-- **Search Music Index** - type a title, pick a result; the album/track GUIDs are filled in and the release is cached (it appears on the Cache tab immediately, before it has ever been viewed on the front end).
+- **Search Music Index** - a **Search** button opens the search area on demand; type a title and press Search (or Enter), then pick a result: the area collapses again and the album/track GUIDs are filled in, with the release cached (it appears on the Cache tab immediately, before it has ever been viewed on the front end). Escape or Close discards the area without changing the block; the search only runs when you submit, never as you type.
+- **Release details** - the album, track, and artist text for the current selection, read-only from the cache row (same cells the Cache tab shows); never editable here. Pairs not cached yet show em dashes plus a note.
 - **Fountain.fm link** - reads and writes the same `fountain_url` cell as the Cache tab's "Fountain.fm link" field, so every shortcode of that release shares one link. The value must be an `https` URL on fountain.fm (or empty for the search-fallback button); there is no `fountain=` attribute.
 - **Release header** - a three-state select: *Site setting* omits the attribute entirely (the site-wide setting applies), *Always Show* / *Always Hide* emit `header="true"` / `header="false"`.
 - **Release GUIDs** - the raw GUID fields, for pasting by hand.
 
-The block stores the assembled `[musiclink ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search and the link field are editor-only, behind `manage_options`.
+Once a release is selected, the block canvas shows it **exactly as the public page will**: a live preview served by the block's own `GET /render` route, which runs the real shortcode against the cache row - release header, track/album titles, artist, artwork, and the buttons in admin order, styled with the plugin's own front-end CSS. Editor-only adjustments keep the preview at page-preview scale: the album art renders as a 120px thumbnail (the public 200px size is too heavy for the edit page), the attribution footer and modal markup that follow the button list are omitted, and the buttons themselves are inert; an unknown GUID previews the same "Album/Song not found" message the front end would show.
+
+The block stores the assembled `[musiclink ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search, the preview, and the link field are editor-only, behind `manage_options`.
 
 ## V4V Music Link Resolver Pro
 

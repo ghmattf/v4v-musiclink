@@ -192,6 +192,11 @@ class V4V_Music_Link_Resolver {
 		// settings-pane search/fountain field, and the block's inline JS.
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
+		// Canvas content styles for the block preview: enqueue_block_assets
+		// is the only hook whose CSS reaches the iframed editor canvas
+		// (WP 6.3+; the post editor iframes from WP 7.1 / Gutenberg 23.6) -
+		// see enqueue_block_editor_styles().
+		add_action( 'enqueue_block_assets', array( $this, 'enqueue_block_editor_styles' ) );
 		// Background Music Index refreshes, after the page has gone out
 		// (priority 10 lets wp_ob_end_flush_all at priority 1 flush first).
 		add_action( 'shutdown', array( $this, 'run_queued_mi_refresh' ) );
@@ -1298,14 +1303,16 @@ class V4V_Music_Link_Resolver {
 	}
 
 	/**
-	 * Block-editor assets for the shortcode builder (O19): a src-less
-	 * handle carrying the block-editor dependencies, then the whole block
-	 * as one inline script. Deliberately src-false: the project ships no
-	 * .js files (single-file plugin convention) and there is no URL to
+	 * Block-editor JS for the shortcode builder (O19): a src-less handle
+	 * carrying the block-editor dependencies, then the whole block as one
+	 * inline script. Deliberately src-false: the project ships no .js
+	 * files (single-file plugin convention) and there is no URL to
 	 * cache-bust, so the version argument stays false instead of a literal
 	 * that would drift from the plugin version. Admin editors only - the
 	 * block talks to the manage_options REST routes, so anyone else gets
-	 * nothing registered.
+	 * nothing registered. Scripts belong on this hook (they run in the
+	 * editor's outer document, where block registration happens);
+	 * styles deliberately do NOT - see enqueue_block_editor_styles().
 	 */
 	public function enqueue_block_editor_assets() {
 		if ( ! current_user_can( 'manage_options' ) ) {
@@ -1321,6 +1328,44 @@ class V4V_Music_Link_Resolver {
 		);
 		wp_enqueue_script( 'v4v-musiclink-block' );
 		wp_add_inline_script( 'v4v-musiclink-block', $this->block_js() );
+	}
+
+	/**
+	 * Canvas content styles for the block preview: the plugin's own
+	 * front-end CSS plus the editor-only preview rules (inert anchors,
+	 * scaled artwork, trimmed footer/modal), attached to a src-false
+	 * `v4v-musiclink-editor` handle.
+	 *
+	 * Delivered through enqueue_block_assets - the documented channel for
+	 * editor CONTENT styles since WP 6.3 - because the post/site editor
+	 * canvas is an iframe (site editor always; post editor always from WP
+	 * 7.1 / Gutenberg 23.6): styles printed from enqueue_block_editor_assets
+	 * land in the outer admin document only and never reach the iframe,
+	 * which rendered the preview unstyled (artwork at natural size,
+	 * spilling out of the page). The two guards keep this CSS to the
+	 * canvas surface alone: the iframe-asset capture (core brackets its
+	 * dispatch of this hook with should_load_block_editor_scripts_and_styles
+	 * forced to false) or an actual block-editor screen - never the front
+	 * end (where enqueue_assets() already prints inline_css()) and never
+	 * unrelated admin pages. Same admin-only stance as the script hook.
+	 */
+	public function enqueue_block_editor_styles() {
+		$captured = (bool) has_filter( 'should_load_block_editor_scripts_and_styles', '__return_false' );
+		$screen   = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		$in_editor = $screen && is_object( $screen )
+			&& is_callable( array( $screen, 'is_block_editor' ) )
+			&& $screen->is_block_editor();
+
+		if ( ! $captured && ! $in_editor ) {
+			return;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		wp_register_style( 'v4v-musiclink-editor', false );
+		wp_enqueue_style( 'v4v-musiclink-editor' );
+		wp_add_inline_style( 'v4v-musiclink-editor', $this->inline_css() . $this->block_editor_css() );
 	}
 
 	/**
@@ -1391,7 +1436,20 @@ class V4V_Music_Link_Resolver {
 		return ( err && err.message ) ? err.message : __( 'Request failed.', 'v4v-musiclink' );
 	}
 
+	// On-demand search (O23): collapsed, the panel is a single [Search]
+	// button; opening it reveals the query field and results area, and
+	// picking a hit fills the GUID attributes and collapses the area
+	// again. Explicit submit (inner button or Enter) instead of
+	// type-ahead, so the REST search only runs when asked; Escape or
+	// Close resets the area without touching the saved attributes (the
+	// Release GUIDs panel remains the manual view). A generation counter
+	// drops in-flight responses once the area closes or a newer search
+	// starts. All hooks run unconditionally before the collapsed/open
+	// branch, per the Rules of Hooks.
 	function SearchPanel( props ) {
+		var openState = useState( false );
+		var open = openState[0];
+		var setOpen = openState[1];
 		var queryState = useState( '' );
 		var query = queryState[0];
 		var setQuery = queryState[1];
@@ -1410,14 +1468,42 @@ class V4V_Music_Link_Resolver {
 		var errorState = useState( '' );
 		var error = errorState[0];
 		var setError = errorState[1];
-		var timer = useRef( null );
+		var seq = useRef( 0 );
+		var inputRef = useRef( null );
+
+		function reset() {
+			seq.current++;
+			setQuery( '' );
+			setResults( [] );
+			setHasMore( false );
+			setPage( 1 );
+			setLoading( false );
+			setError( '' );
+		}
+
+		function close() {
+			reset();
+			setOpen( false );
+		}
+
+		// Focus the query field as soon as the area opens, so Enter can
+		// submit without reaching for the mouse.
+		useEffect( function () {
+			if ( open && inputRef.current ) {
+				inputRef.current.focus();
+			}
+		}, [ open ] );
 
 		function do_search( q, p, append ) {
+			var my_seq = ++seq.current;
 			setLoading( true );
 			setError( '' );
 			apiFetch( {
 				path: NAMESPACE + '/search?q=' + encodeURIComponent( q ) + '&page=' + p
 			} ).then( function ( data ) {
+				if ( my_seq !== seq.current ) {
+					return;
+				}
 				setResults( append
 					? function ( prev ) { return prev.concat( data.results ); }
 					: data.results );
@@ -1425,45 +1511,63 @@ class V4V_Music_Link_Resolver {
 				setPage( p );
 				setLoading( false );
 			} ).catch( function ( err ) {
+				if ( my_seq !== seq.current ) {
+					return;
+				}
 				setLoading( false );
 				setError( error_message( err ) );
 			} );
 		}
 
-		useEffect( function () {
-			if ( timer.current ) {
-				window.clearTimeout( timer.current );
-			}
+		function submit() {
 			var q = query.trim();
-			if ( ! q ) {
-				setResults( [] );
-				setHasMore( false );
-				return undefined;
+			if ( ! q || loading ) {
+				return;
 			}
-			timer.current = window.setTimeout( function () {
-				do_search( q, 1, false );
-			}, 300 );
-			return function () {
-				if ( timer.current ) {
-					window.clearTimeout( timer.current );
-				}
-			};
-		}, [ query ] );
+			do_search( q, 1, false );
+		}
 
 		function pick( hit ) {
 			props.setAttributes( {
 				album: hit.album_guid,
 				track: hit.track_guid || ''
 			} );
+			close();
+		}
+
+		if ( ! open ) {
+			return el( Button, { className: 'v4v-ml-search-open', onClick: function () { setOpen( true ); } },
+				__( 'Search', 'v4v-musiclink' )
+			);
 		}
 
 		return el( Fragment, null,
-			el( TextControl, {
-				label: __( 'Search by title', 'v4v-musiclink' ),
-				value: query,
-				placeholder: __( 'Song or album title...', 'v4v-musiclink' ),
-				onChange: setQuery
-			} ),
+			el( 'div', { className: 'v4v-ml-searchbar' },
+				el( 'input', {
+					type: 'text',
+					className: 'components-text-control__input',
+					'aria-label': __( 'Search by title', 'v4v-musiclink' ),
+					placeholder: __( 'Song or album title...', 'v4v-musiclink' ),
+					value: query,
+					ref: inputRef,
+					onChange: function ( e ) { setQuery( e.target.value ); },
+					onKeyDown: function ( e ) {
+						if ( 'Enter' === e.key ) {
+							e.preventDefault();
+							submit();
+						} else if ( 'Escape' === e.key ) {
+							e.preventDefault();
+							close();
+						}
+					}
+				} ),
+				el( Button, { className: 'v4v-ml-search-submit', onClick: submit, disabled: loading },
+					__( 'Search', 'v4v-musiclink' )
+				),
+				el( Button, { className: 'v4v-ml-search-cancel', onClick: close },
+					__( 'Close', 'v4v-musiclink' )
+				)
+			),
 			error ? el( Notice, { status: 'error', isDismissible: false }, error ) : null,
 			loading ? el( Spinner ) : null,
 			el( 'ul', { className: 'v4v-ml-results' },
@@ -1568,6 +1672,86 @@ class V4V_Music_Link_Resolver {
 		);
 	}
 
+	// Read-only Album / Track / Artist text for the current selection,
+	// read from the cache row (GET /row - the same cells the Cache tab
+	// shows). Plain text rows only, deliberately no inputs: the values
+	// are display metadata owned by the cache row, edited nowhere here.
+	// An empty album guid shows a hint; a pair whose row does not exist
+	// yet (hand-pasted GUIDs before the first render) shows em dashes
+	// plus a note instead of pretending to know the title.
+	function ReleaseDetails( props ) {
+		var album = props.album;
+		var track = props.track;
+		var infoState = useState( null );
+		var info = infoState[0];
+		var setInfo = infoState[1];
+		var errorState = useState( '' );
+		var error = errorState[0];
+		var setError = errorState[1];
+		var requestSeq = useRef( 0 );
+
+		useEffect( function () {
+			var seq = ++requestSeq.current;
+			if ( ! album ) {
+				setInfo( null );
+				setError( '' );
+				return undefined;
+			}
+			apiFetch( {
+				path: NAMESPACE + '/row?album=' + encodeURIComponent( album ) +
+					'&track=' + encodeURIComponent( track || '' )
+			} ).then( function ( data ) {
+				if ( seq !== requestSeq.current ) {
+					return;
+				}
+				setInfo( data );
+				setError( '' );
+			} ).catch( function ( err ) {
+				if ( seq !== requestSeq.current ) {
+					return;
+				}
+				setError( error_message( err ) );
+			} );
+		}, [ album, track ] );
+
+		function row( label, text ) {
+			return el( 'p', { className: 'v4v-ml-info-row' },
+				el( 'strong', null, label ),
+				text ? text : '—'
+			);
+		}
+
+		if ( ! album ) {
+			return el( 'p', { className: 'v4v-ml-hint' }, __(
+				'No release selected yet.',
+				'v4v-musiclink'
+			) );
+		}
+		if ( error ) {
+			return el( 'p', { className: 'v4v-ml-error' }, __(
+				'Could not load release details: ',
+				'v4v-musiclink'
+			) + error );
+		}
+		if ( ! info ) {
+			return el( 'p', { className: 'v4v-ml-hint' }, __(
+				'Loading…',
+				'v4v-musiclink'
+			) );
+		}
+		return el( Fragment, null,
+			row( __( 'Album: ', 'v4v-musiclink' ), info.album_title ),
+			row( __( 'Track: ', 'v4v-musiclink' ), info.track_title ),
+			row( __( 'Artist: ', 'v4v-musiclink' ), info.artist ),
+			false === info.has_row
+				? el( 'p', { className: 'v4v-ml-hint' }, __(
+					'Not cached yet - the text fills in once the release has been rendered or searched.',
+					'v4v-musiclink'
+				) )
+				: null
+		);
+	}
+
 	blocks.registerBlockType( 'v4v-musiclink/musiclink', {
 		title: __( 'Music Link', 'v4v-musiclink' ),
 		description: __(
@@ -1582,13 +1766,105 @@ class V4V_Music_Link_Resolver {
 			header: { type: 'string', default: 'site' }
 		},
 		edit: function ( props ) {
+			var album = props.attributes.album;
+			var track = props.attributes.track;
+			var header = props.attributes.header;
 			var shortcode = build_shortcode( props.attributes );
+
+			var htmlState = useState( '' );
+			var html = htmlState[0];
+			var setHtml = htmlState[1];
+			var errorState = useState( '' );
+			var previewError = errorState[0];
+			var setPreviewError = errorState[1];
+			var requestSeq = useRef( 0 );
+
+			// Live canvas preview: the server runs the real shortcode
+			// (REST /render), so what the block shows - titles, artist,
+			// art, buttons in admin order - is exactly what the public
+			// page will show, read from the cache row. Debounced because
+			// the GUID fields type one character at a time; the sequence
+			// counter drops responses that arrive after a newer request.
+			useEffect( function () {
+				var seq = ++requestSeq.current;
+				if ( ! album ) {
+					setHtml( '' );
+					setPreviewError( '' );
+					return undefined;
+				}
+				var timer = setTimeout( function () {
+					var path = NAMESPACE + '/render?album=' + encodeURIComponent( album ) +
+						'&track=' + encodeURIComponent( track || '' );
+					if ( 'true' === header || 'false' === header ) {
+						path += '&header=' + encodeURIComponent( header );
+					}
+					apiFetch( { path: path } ).then( function ( data ) {
+						if ( seq !== requestSeq.current ) {
+							return;
+						}
+						setHtml( data && data.html ? data.html : '' );
+						setPreviewError( '' );
+					} ).catch( function ( err ) {
+						if ( seq !== requestSeq.current ) {
+							return;
+						}
+						setPreviewError( error_message( err ) );
+					} );
+				}, 400 );
+				return function () {
+					clearTimeout( timer );
+				};
+			}, [ album, track, header ] );
+
+			// No release yet: point at the settings pane. Release chosen:
+			// show the rendered preview (falling back to an error note
+			// plus the raw shortcode only if the render route fails, so
+			// the block stays usable offline).
+			var canvas;
+			if ( ! album ) {
+				canvas = el( 'p', { className: 'v4v-ml-hint' }, __(
+					'Search by title in the settings pane, or paste the release GUIDs.',
+					'v4v-musiclink'
+				) );
+			} else if ( html ) {
+				canvas = el( Fragment, null,
+					el( 'div', { className: 'v4v-ml-preview' },
+						el( RawHTML, null, html )
+					),
+					previewError
+						? el( 'p', { className: 'v4v-ml-error' }, __(
+							'Preview refresh failed: ',
+							'v4v-musiclink'
+						) + previewError )
+						: null
+				);
+			} else if ( previewError ) {
+				canvas = el( Fragment, null,
+					el( 'p', { className: 'v4v-ml-error' }, __(
+						'Preview failed: ',
+						'v4v-musiclink'
+					) + previewError ),
+					shortcode ? el( 'code', null, shortcode ) : null
+				);
+			} else {
+				canvas = el( 'p', { className: 'v4v-ml-hint' }, __(
+					'Rendering preview…',
+					'v4v-musiclink'
+				) );
+			}
+
 			return el( Fragment, null,
 				el( InspectorControls, null,
 					el( PanelBody, { title: __( 'Search Music Index', 'v4v-musiclink' ), initialOpen: true },
 						el( SearchPanel, {
 							attributes: props.attributes,
 							setAttributes: props.setAttributes
+						} )
+					),
+					el( PanelBody, { title: __( 'Release details', 'v4v-musiclink' ), initialOpen: true },
+						el( ReleaseDetails, {
+							album: props.attributes.album,
+							track: props.attributes.track
 						} )
 					),
 					el( PanelBody, { title: __( 'Fountain.fm link', 'v4v-musiclink' ), initialOpen: true },
@@ -1628,12 +1904,7 @@ class V4V_Music_Link_Resolver {
 					)
 				),
 				el( 'div', { className: 'v4v-ml-block' },
-					shortcode
-						? el( 'code', null, shortcode )
-						: el( 'p', null, __(
-							'Search by title in the settings pane, or paste the release GUIDs.',
-							'v4v-musiclink'
-						) )
+					canvas
 				)
 			);
 		},
@@ -1720,6 +1991,36 @@ V4VML;
 				background: #f5f5f5; padding: 0.75em 1em; border-radius: 6px;
 				overflow-x: auto; font-size: 0.9em;
 			}
+		';
+	}
+
+	/**
+	 * Editor-only rules printed alongside inline_css() on the
+	 * `v4v-musiclink-editor` handle (see enqueue_block_editor_styles()),
+	 * so the preview looks like the public page while staying inert and
+	 * preview-sized: anchors are pointer-events:none so the launch
+	 * buttons and the Fountain confirm modal never fire from inside the
+	 * editor; the album art is scaled down to a 120px thumbnail (the
+	 * front-end 200px dominates the edit page); everything that follows
+	 * the button list - the attribution footer and the modal markup - is
+	 * omitted from the preview; and the inspector's on-demand search bar
+	 * lays out as one row (query field + Search + Close). A light dashed
+	 * outline marks where the preview sits on a blank canvas.
+	 */
+	private function block_editor_css() {
+		return '
+			.v4v-ml-preview { outline: 1px dashed rgba(0, 0, 0, 0.25); outline-offset: 8px; }
+			.v4v-ml-preview a { pointer-events: none; }
+			.v4v-ml-hint { color: #666; font-style: italic; }
+			.v4v-ml-error { color: #a00; }
+			.v4v-ml-preview .v4v-musiclink-art {
+				width: 120px; height: 120px; flex: 0 0 120px;
+				max-width: 100%; object-fit: cover;
+			}
+			.v4v-ml-preview .v4v-musiclink-footer,
+			.v4v-ml-preview .v4v-musiclink-modal-overlay { display: none; }
+			.v4v-ml-searchbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+			.v4v-ml-searchbar input { flex: 1 1 120px; min-width: 0; width: auto; }
 		';
 	}
 
@@ -2551,6 +2852,12 @@ JS;
 				'permission_callback' => array( $this, 'rest_permission' ),
 			),
 		) );
+
+		register_rest_route( 'v4v-musiclink/v1', '/render', array(
+			'methods'             => 'GET',
+			'callback'            => array( $this, 'rest_render' ),
+			'permission_callback' => array( $this, 'rest_permission' ),
+		) );
 	}
 
 	/**
@@ -2655,6 +2962,46 @@ JS;
 			: ( isset( $hits[ $offset + $per_page ] ) || $search['has_more'] );
 
 		return $payload;
+	}
+
+	/**
+	 * GET /v4v-musiclink/v1/render?album=&track=&header= - the block
+	 * canvas's live preview. Runs the real render() so the editor shows
+	 * exactly what the public page will show: release header, titles,
+	 * artist, art and the buttons in admin order. It IS a page render,
+	 * so previewing a pasted guid pair caches the release and may queue
+	 * a background Music Index refresh - same as a front-end visit.
+	 * header passes through only as the literal 'true'/'false' override;
+	 * 'site'/anything else is omitted so the admin "Release header"
+	 * setting decides, mirroring the shortcode attribute semantics. An
+	 * unguarded (over-long) album guid is a 400, like an absent one -
+	 * never a render of a usage message the block would not display.
+	 * Administrator-only, like every route here.
+	 */
+	public function rest_render( $request ) {
+		$album = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'album' ) ) );
+
+		if ( '' === $album ) {
+			return new WP_Error(
+				'v4v_musiclink_missing_album',
+				__( 'An album GUID is required for a preview.', 'v4v-musiclink' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$track  = $this->guard_guid( sanitize_text_field( (string) $request->get_param( 'track' ) ) );
+		$header = (string) $request->get_param( 'header' );
+
+		$atts = array(
+			'album' => $album,
+			'track' => $track,
+		);
+
+		if ( in_array( $header, array( 'true', 'false' ), true ) ) {
+			$atts['header'] = $header;
+		}
+
+		return array( 'html' => $this->render( $atts ) );
 	}
 
 	/**

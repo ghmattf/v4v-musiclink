@@ -522,6 +522,30 @@ from the block's **settings pane** (InspectorControls):
   NOT a shortcode attribute: nothing is added to the attribute contract,
   no `fountain="..."` is ever emitted, and O18 stays independent and On
   hold with its attribute design untouched.
+- **Read-only Release details panel** (user request 2026-10-06): beside
+  the search box, a "Release details" inspector panel shows the Album /
+  Track / Artist text of the current selection - fetched from the same
+  `GET /row` payload the Fountain field already uses (no server change),
+  rendered as plain `strong`+text rows (`v4v-ml-info-row`), never as
+  inputs, so the cache row stays the single owner of those cells. Em
+  dashes plus a "not cached yet" note when the pair has no row; hint
+  when no album guid is set; seq-guarded fetch on guid change.
+- **Live canvas preview, as publicly rendered** (user request
+  2026-10-06, superseding the plan's "simple selected-state preview"):
+  once a release is selected the block body stops showing the shortcode
+  string - a debounced, seq-guarded fetch of `GET /render` runs the real
+  `render()` against the cache row, and the returned HTML (release
+  header with track/album/artist from the cached links, art, buttons in
+  admin order, front-end CSS, anchors inert) fills the canvas. That
+  answers both halves of the request: the cached details replace the
+  static text once selected, and the block shows the public-facing look
+  rather than the shortcode value. Route failure falls back to an error
+  note plus the raw shortcode so the block stays usable offline.
+  Editor-only CSS refinements (user requests 2026-10-06, second batch):
+  the album art is scaled to a 120px thumbnail inside the preview (the
+  front-end 200px dominates the edit page), and everything after the
+  button list - the attribution footer and the modal markup - is
+  hidden from the preview; `save()` and the front end are untouched.
 
 **Why:** the attribute contract has sharp edges hand-typing trips over:
 standard ignores **all** attributes if any name is unexpected
@@ -619,18 +643,25 @@ relocated by symbol:**
   `GET`/`PUT .../row?album=&track=` for the fountain field (GET returns
   `{has_row, fountain_url, album_title, track_title, artist}`; PUT takes
   `{album, track, fountain_url}` and returns the saved state or a 400
-  with the validation error).
+  with the validation error) and `GET .../render?album=&track=&header=`
+  for the canvas preview (runs the real `render()` and returns
+  `{html}` - a page render, so previewing caches the release and may
+  queue a background MI refresh exactly like a front-end visit;
+  `header` passes through only as the literal `true`/`false` override,
+  anything else omitted so the site setting decides; 400 without a
+  usable album guid).
 - No front-end search mode - README's "no visitor-facing search" note
   stays true; the route is admin-editor-only.
 
 **Sites (standard only):**
-- Ctor **172-180**: add `rest_api_init` (route registration) and
-  `enqueue_block_editor_assets` (script + config) actions.
+- Ctor **172-180**: add `rest_api_init` (route registration),
+  `enqueue_block_editor_assets` (block JS) and `enqueue_block_assets`
+  (canvas styles, see below) actions.
 - New REST callbacks as public methods (harness-callable):
   `rest_permission()`, `rest_search()`, `rest_get_row()`,
-  `rest_update_row()`; the row PUT reuses `cache_table()`,
-  `cache_row_hash()`, `is_valid_stored_url()` and the fountain column
-  discipline of `handle_update_cache_row()` **1151**.
+  `rest_update_row()`, `rest_render()`; the row PUT reuses
+  `cache_table()`, `cache_row_hash()`, `is_valid_stored_url()` and the
+  fountain column discipline of `handle_update_cache_row()` **1151**.
 - Editor script: inline JS attached to the core `wp-blocks` handle (or
   a src-false `v4v-musiclink-block` handle + `wp_add_inline_script`,
   mirroring `enqueue_assets()` **1278-1281**) - deliberately src-false
@@ -638,10 +669,28 @@ relocated by symbol:**
   `wp_register_script( '...', false, array(), 'x.y.z' )` sed keeps
   working; i18n/config strings passed as a JSON `before`-inline from
   PHP so no JS translation files exist.
+- Canvas styles (corrected 2026-10-06 after the preview shipped
+  unstyled): a matching src-false `v4v-musiclink-editor` style handle
+  carries `inline_css()` plus the editor-only rules (preview outline,
+  `pointer-events: none`, 120px artwork, footer/modal trimmed), but it
+  is attached to `enqueue_block_assets` via
+  `enqueue_block_editor_styles()`, NOT to `enqueue_block_editor_assets`
+  - the canvas is an iframe (site editor always; post editor always
+  from WP 7.1 / Gutenberg 23.6) and styles from the latter print only
+  in the outer admin document, never inside the iframe. Two guards keep
+  the CSS canvas-only: the iframe-asset capture (core brackets its
+  dispatch of `enqueue_block_assets` with
+  `should_load_block_editor_scripts_and_styles` forced to false) or an
+  actual `get_current_screen()->is_block_editor()` screen, plus the
+  usual `manage_options` gate; the front end keeps using
+  `wp_enqueue_scripts` -> `enqueue_assets()`.
 - Block JS (plain `createElement`, deps `wp-blocks`, `wp-block-editor`,
   `wp-components`, `wp-element`, `wp-i18n`, `wp-api-fetch`):
   attributes `album`, `track`, `header` ('site'|'true'|'false');
-  `edit()` = inspector controls + a simple selected-state preview;
+  `edit()` = inspector controls + a live canvas preview (debounced,
+  seq-guarded fetch of `.../render`; the public-looking HTML replaces
+  the shortcode text once a release is selected, falling back to an
+  error note + the raw shortcode if the route fails);
   `save()` = RawHTML shortcode string, track/header attributes omitted
   when empty/site, only whitelisted names ever emitted.
 - Optional extra (out of scope unless asked): Cache-tab per-row "copy
@@ -686,16 +735,24 @@ relocated by symbol:**
    field = the cache row's link); plugin-header DevTools note optional;
    CHANGELOG "Added" entry at release (block + REST routes, admin-only).
 
-**Verification (done 2026-10-06):** `./php/php -l` clean on both files;
-13 offline harnesses pass - new `tmp/test_block_rest.php` 62 (routes +
-permission gate, search shape/dedupe/has_more/resolution side-effects,
-row GET/PUT validation, fountain-half-only upsert, minimal-row creation,
-memo invalidation, enqueue gate, no-`fountain="` pin), stored_links 358,
-app_launch 114, log_limits 93, search_pagination 44, canonical 36,
-fix 84, fountain_path 30, log_scope 29, v4vmusic 28, mi_ttl 26,
-missing_params 12; candidate/case still 404 (O9, known); live 10/10;
-e2e 14/14; block JS balanced-checked (no JS runtime in toolchain - the
-manual editor smoke test in step 6 is still owed by the user).
+**Verification (done 2026-10-06, re-run after the live-preview
+follow-up, the iframed-canvas style fix, the Release details panel,
+and the O23 search-button flow):** `./php/php -l` clean on
+both files; 13 offline harnesses pass - `tmp/test_block_rest.php` 98
+(routes + permission gate, search shape/dedupe/has_more/resolution
+side-effects, row GET/PUT validation, fountain-half-only upsert,
+minimal-row creation, memo invalidation, script gate on
+`enqueue_block_editor_assets` + style gate on `enqueue_block_assets`
+(capture / block-editor screen / non-admin / no-context),
+`/render` validation + header 3-state + site-setting + album-only +
+unknown-guid output, no-`fountain="` pin, JS pins for `/render?`,
+Release details, and the O23 collapsed/Enter/Close flow),
+stored_links 358, app_launch 114, log_limits 93, search_pagination 44,
+canonical 36, fix 84, fountain_path 30, log_scope 29, v4vmusic 28,
+mi_ttl 26, missing_params 12; candidate/case still 404 (O9, known);
+live 10/10; e2e 14/14; block JS (530 lines) balanced-checked (no JS
+runtime in toolchain - the manual editor smoke test in step 6 is still
+owed by the user).
 
 **Interactions:** O18 (shortcode `fountain` attribute) no longer blocks
 or is blocked by this - the block deliberately does not use it; if O18
@@ -703,6 +760,101 @@ ever ships, the block still need not emit it (the field covers the
 authoring case). O14/O15/O21 behaviour all observed as-is: empty
 `fountain_url` -> search fallback until the field (or Cache tab) fills
 it.
+
+---
+
+## O22. Configurable background color for the music app icons (transparent PNGs)
+
+**What:** a configurable background colour behind the app button icons -
+several of the app favicons / user-supplied icon overrides are transparent
+PNGs and can disappear or look muddy against the site's background colour.
+
+**Where:** icons render as `<img class="v4v-musiclink-icon" width="40"
+height="40">` inside the launch buttons from `render_html()` (the `.v4v-musiclink-icon`
+rules live in `inline_css()`); the per-app icon is resolved by `get_app_icon()`
+(admin override in the app config, else `favicon_url()`), configured in the
+settings page's Music apps table (`render_settings_page()` - Icon / "Icon
+override URL" columns) and persisted by `sanitize_apps_settings()` (the
+`icon_url` key). The same markup also appears in the O19 block-editor
+preview, so anything added to `inline_css()` reaches the preview too.
+
+**Why:** user request 2026-10-06 - "some icons utilise transparent
+backgrounds that may not display well on the website background color."
+
+**Plan sketch (options identified, none picked):**
+1. Setting shape - either a single site-wide colour (new option, e.g.
+   `v4v_musiclink_icon_bg`; hex string, '' = transparent/today's look) or a
+   per-app `icon_bg` alongside `icon_url` in the app config (site default
+   plus optional per-app override, matching the existing override pattern in
+   `sanitize_apps_settings()`). Site-wide is the smaller change.
+2. Sanitise with `sanitize_hex_color()` (empty allowed) through the same
+   `register_settings()` option group as the other settings.
+3. Apply as `background-color` on `.v4v-musiclink-icon` (the 40x40, 6px
+   rounded img itself, so transparent PNGs sit on the colour) - `inline_css()`
+   would interpolate the stored value; unset keeps today's transparent look.
+   Evaluate whether a small `padding`/`border-radius` polish is wanted on
+   non-square icons.
+4. Edit UI: a colour input on the settings page - either in the Music apps
+   panel beside the icon overrides, or on General next to "Release header".
+5. Harness pin: option flows into `inline_css()` output; nothing changes
+   when unset (existing front-end harnesses stay green).
+6. Docs: README settings bullet + CHANGELOG at release.
+
+**Status: Planned** (user picked 2026-10-06 - add to the list; implement only
+on request).
+
+---
+
+## O23. Block settings: on-demand search - a [Search] button that reveals the search area, collapses on selection
+
+**What:** change the O19 block's settings-pane search from type-ahead
+(debounced input firing as you type) to an on-demand flow: a **[Search]
+button** in the inspector; pressing it reveals a search area (query field +
+results); when the user picks a result the area hides again and the block
+settings are updated (album/track GUIDs fill in, exactly as today).
+
+**Where:** standard `v4v-musiclink/v4v-musiclink.php` -> `block_js()` -> the
+"Search Music Index" `PanelBody` and its `SearchPanel` component (the 300ms
+debounced `useEffect`, `do_search( query, page, append )`, results list,
+"Load more" button, `error_message` handling). Server side is unchanged:
+`rest_search()` (`GET /v4v-musiclink/v1/search`) is already request-driven
+and works as-is for an explicit button submit - no REST or harness change
+needed; the block JS has no offline test (no JS runtime), so the flow is
+covered by the manual editor smoke test.
+
+**Why:** UX request 2026-10-06 (user asked "can it be changed...?", then
+explicitly deferred implementation) - search only when wanted, and a
+settings pane that returns to its compact state after a selection instead
+of staying open with results.
+
+**Plan sketch (pure inspector JS, no server work):**
+1. Local state in/around `SearchPanel`: `open` (area visible), plus the
+   existing query/results/page state.
+2. Collapsed: a single **Search** button; the GUID fields and every other
+   panel stay as they are. Activating it opens the area and focuses the
+   query input.
+3. Area: query field (Enter / inner submit, or keep the debounce now that
+   the field only exists while open), results list with the existing hit
+   rows and "Load more".
+4. On hit selection: `setAttributes( { album, track } )` as today, then
+   clear query/results and collapse. The Fountain panel and canvas preview
+   already react to attribute changes (debounced `GET /render`, `/row` GET
+   on guid change).
+5. Escape or closing the area resets it to collapsed without touching the
+   saved attributes; the "Release GUIDs" panel remains the manual view of
+   the current values.
+6. Docs: one line in README's block-editor subsection when it ships.
+
+**Status: implemented 2026-10-06, uncommitted - remove this item when
+the release ships** (user raised and briefly deferred it the same day,
+then requested implementation. Built exactly per the sketch: collapsed
+[Search] button; open area with query field (explicit submit via inner
+button or Enter, no type-ahead) + results + Load more; pick fills
+`album`/`track` and collapses; Escape/Close resets the area only,
+attributes untouched; generation counter drops in-flight responses on
+close/newer search; inspector-only JS in `SearchPanel`, plus
+`.v4v-ml-searchbar` layout rules in
+`block_editor_css()`. No REST/harness change beyond the three JS pins).
 
 ---
 
