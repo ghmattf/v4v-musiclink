@@ -3,6 +3,18 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.29] - 2026-10-06
+
+### Added
+
+- **Per-app icon background colour** — each music app gains a **Background** column in the Settings → Music apps table (table widened to 900px): a native colour swatch plus a "None (transparent)" tickbox, with the 32px icon preview updating live as either changes (the values are saved only by "Save Changes"). Stored per app in `v4v_musiclink_apps[$slug]['icon_bg']` (`''` = transparent, today's look); `sanitize_apps_settings()` accepts it via core `sanitize_hex_color()` and the "None" tickbox always wins over whatever the swatch holds, so a colour the admin has cleared cannot be resurrected on a later save. On the front end the saved colour is emitted as `style="background-color: #hex"` on that app's 40px icon `<img>` in `render_html()` — transparent PNG favicons now sit on the chosen colour instead of the page background — and a new private `app_icon_bg()` re-validates the hex at render time, so a hand-edited junk option value can never reach the page as anything but a hex colour (or nothing). The block-editor preview shows the colour automatically because it runs the real render path. No change when unset: byte-identical markup. README settings bullets updated; `test_stored_links` grew 358 → 384 (13 pins per plugin: save precedence, settings column/inputs/preview, front-end style for the configured app only, junk and unset cases).
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.33] - 2026-10-06
+
+### Added
+
+- **Per-app icon background colour** — identical to Resolver 1.22.29, mirrored into Pro: the new **Background** column in the Music apps table, `v4v_musiclink_pro_apps[$slug]['icon_bg']` persistence with the "None (transparent)" tickbox winning on save, the render-side `app_icon_bg()` hex guard, and `style="background-color: #hex"` on the `v4v-musiclink-pro-icon` `<img>` — which also shows in the Pro settings preview and the share-page render. README settings bullets updated; the same 13 pins run against Pro in `test_stored_links`.
+
 ## Resolver (v4v-musiclink) — [1.22.28] - 2026-10-06
 
 ### Added
