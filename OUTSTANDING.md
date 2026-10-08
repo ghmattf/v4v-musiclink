@@ -511,7 +511,9 @@ reaches the preview too.
 **Why:** user request 2026-10-06 - "some icons utilise transparent
 backgrounds that may not display well on the website background color."
 
-**Plan sketch (options identified, none picked):**
+**Plan sketch (as explored before the design settled - the Status note
+below records what was actually built: per-app colour, Music apps
+table):**
 1. Setting shape - either a single site-wide colour (new option, e.g.
    `v4v_musiclink_icon_bg`; hex string, '' = transparent/today's look) or a
    per-app `icon_bg` alongside `icon_url` in the app config (site default
@@ -530,8 +532,24 @@ backgrounds that may not display well on the website background color."
    when unset (existing front-end harnesses stay green).
 6. Docs: README settings bullet + CHANGELOG at release.
 
-**Status: Planned** (user picked 2026-10-06 - add to the list; implement only
-on request).
+**Status: implemented 2026-10-06, uncommitted - remove this item when
+the release ships** (user picked it 2026-10-06 and settled the design
+the same day: **per-app** colour, not site-wide; edited in the "Music
+apps" settings table). Built in both plugins: a new "Background"
+column (table widened 760->900px) holding a "None (transparent)"
+checkbox plus a native colour input, and a third settings-page IIFE
+that live-updates the 32px icon preview; `sanitize_apps_settings()`
+saves `icon_bg` per app (core `sanitize_hex_color()`, "None" wins over
+the swatch), `get_app_config()` defaults it to `''`, and a new private
+`app_icon_bg()` re-validates the hex on the render side (a hand-edited
+junk option can never reach the page) and emits
+`style="background-color: #hex"` on the 40px icon `<img>` in
+`render_html()` - so the block-editor preview shows it too. The
+optional padding/border-radius polish from plan item 3 was evaluated
+and skipped (background only). Harness `test_stored_links.php` grew
+358 -> 384 (26 "G" pins: sanitize precedence, settings column/inputs/
+preview, front-end style for the configured app only, junk and unset
+cases); README's two settings bullets updated.
 
 ---
 

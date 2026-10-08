@@ -267,7 +267,7 @@ class V4V_Music_Link_Resolver {
 
 	private function get_app_config( $slug ) {
 		$all      = get_option( 'v4v_musiclink_apps', array() );
-		$defaults = array( 'enabled' => true, 'icon_url' => '' );
+		$defaults = array( 'enabled' => true, 'icon_url' => '', 'icon_bg' => '' );
 		return isset( $all[ $slug ] ) && is_array( $all[ $slug ] )
 			? wp_parse_args( $all[ $slug ], $defaults )
 			: $defaults;
@@ -286,6 +286,19 @@ class V4V_Music_Link_Resolver {
 		return ! empty( $config['icon_url'] ) ? $config['icon_url'] : $this->favicon_url( $domain );
 	}
 
+	/**
+	 * The per-app icon background colour: a validated CSS hex colour
+	 * (#abc / #aabbcc) or '' for transparent (no background). The rule
+	 * mirrors core's sanitize_hex_color(); it runs on the render side
+	 * too, so a value that bypassed the settings sanitizer (hand-edited
+	 * option) can never reach the page as anything but a hex colour.
+	 */
+	private function app_icon_bg( $slug ) {
+		$config = $this->get_app_config( $slug );
+		$color  = isset( $config['icon_bg'] ) ? (string) $config['icon_bg'] : '';
+		return preg_match( '/^#([0-9a-fA-F]{3}){1,2}$/', $color ) ? strtolower( $color ) : '';
+	}
+
 	public function sanitize_apps_settings( $value ) {
 		$slugs  = array_keys( $this->app_registry() );
 		$orders = array();
@@ -296,9 +309,18 @@ class V4V_Music_Link_Resolver {
 			if ( isset( $row['order'] ) && '' !== $row['order'] ) {
 				$orders[ $slug ] = $row['order'];
 			}
+			// "None" ticked wins over whatever the colour input holds,
+			// so an unchecked-then-reticked swatch cannot resurrect a
+			// colour the admin has explicitly cleared.
+			$icon_bg = '';
+			if ( empty( $row['icon_bg_none'] ) && isset( $row['icon_bg'] ) ) {
+				$color   = sanitize_hex_color( $row['icon_bg'] );
+				$icon_bg = $color ? $color : '';
+			}
 			$clean[ $slug ] = array(
 				'enabled'  => ! empty( $row['enabled'] ),
 				'icon_url' => ! empty( $row['icon_url'] ) ? esc_url_raw( trim( $row['icon_url'] ) ) : '',
+				'icon_bg'  => $icon_bg,
 			);
 		}
 
@@ -442,16 +464,17 @@ class V4V_Music_Link_Resolver {
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Music apps', 'v4v-musiclink' ); ?></th>
 						<td>
-							<table class="widefat" style="max-width:760px;">
-								<thead>
-									<tr>
-										<th style="width:100px;"><?php esc_html_e( 'Order', 'v4v-musiclink' ); ?></th>
-										<th style="width:60px;"><?php esc_html_e( 'Active', 'v4v-musiclink' ); ?></th>
-										<th><?php esc_html_e( 'App', 'v4v-musiclink' ); ?></th>
-										<th style="width:60px;"><?php esc_html_e( 'Icon', 'v4v-musiclink' ); ?></th>
-										<th><?php esc_html_e( 'Icon override URL', 'v4v-musiclink' ); ?></th>
-									</tr>
-								</thead>
+						<table class="widefat" style="max-width:900px;">
+							<thead>
+								<tr>
+									<th style="width:100px;"><?php esc_html_e( 'Order', 'v4v-musiclink' ); ?></th>
+									<th style="width:60px;"><?php esc_html_e( 'Active', 'v4v-musiclink' ); ?></th>
+									<th><?php esc_html_e( 'App', 'v4v-musiclink' ); ?></th>
+									<th style="width:60px;"><?php esc_html_e( 'Icon', 'v4v-musiclink' ); ?></th>
+									<th><?php esc_html_e( 'Icon override URL', 'v4v-musiclink' ); ?></th>
+									<th style="width:120px;"><?php esc_html_e( 'Background', 'v4v-musiclink' ); ?></th>
+								</tr>
+							</thead>
 								<tbody>
 									<?php $position = 0; ?>
 									<?php foreach ( $this->ordered_app_registry() as $slug => $app ) : ?>
@@ -459,6 +482,7 @@ class V4V_Music_Link_Resolver {
 										$config        = $this->get_app_config( $slug );
 										$preview        = $this->get_app_icon( $slug, $app['domain'] );
 										$default_icon   = $this->favicon_url( $app['domain'] );
+										$icon_bg        = $this->app_icon_bg( $slug );
 										$field_name     = 'v4v_musiclink_apps[' . $slug . ']';
 										?>
 										<tr class="v4v-app-row">
@@ -482,16 +506,16 @@ class V4V_Music_Link_Resolver {
 												/>
 											</td>
 											<td><?php echo esc_html( $app['label'] ); ?></td>
-											<td>
-												<img
-													class="v4v-app-icon-preview"
-													src="<?php echo esc_url( $preview ); ?>"
-													alt=""
-													width="32"
-													height="32"
-													style="display:block; width:32px; height:32px; border-radius:4px;"
-												/>
-											</td>
+										<td>
+											<img
+												class="v4v-app-icon-preview"
+												src="<?php echo esc_url( $preview ); ?>"
+												alt=""
+												width="32"
+												height="32"
+												style="display:block; width:32px; height:32px; border-radius:4px;<?php echo '' !== $icon_bg ? ' background-color:' . esc_attr( $icon_bg ) . ';' : ''; ?>"
+											/>
+										</td>
 											<td>
 												<input
 													type="url"
@@ -504,13 +528,32 @@ class V4V_Music_Link_Resolver {
 												<button type="button" class="button v4v-app-icon-set"><?php esc_html_e( 'Set', 'v4v-musiclink' ); ?></button>
 												<span class="v4v-app-icon-warning" style="color:#a00; display:none;"><?php esc_html_e( 'Image could not be loaded from that URL.', 'v4v-musiclink' ); ?></span>
 											</td>
+											<td>
+												<label style="display:block; margin-bottom:4px;">
+													<input
+														type="checkbox"
+														class="v4v-app-bg-none"
+														name="<?php echo esc_attr( $field_name ); ?>[icon_bg_none]"
+														value="1"
+														<?php checked( '' === $icon_bg ); ?>
+													/>
+													<?php esc_html_e( 'None (transparent)', 'v4v-musiclink' ); ?>
+												</label>
+												<input
+													type="color"
+													class="v4v-app-bg-color"
+													name="<?php echo esc_attr( $field_name ); ?>[icon_bg]"
+													value="<?php echo esc_attr( '' !== $icon_bg ? $icon_bg : '#ffffff' ); ?>"
+													title="<?php esc_attr_e( 'Icon background colour', 'v4v-musiclink' ); ?>"
+												/>
+											</td>
 										</tr>
 									<?php $position++; ?>
 									<?php endforeach; ?>
 								</tbody>
 							</table>
 							<p class="description">
-								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [musiclink] shortcode is used. Use the arrows in the "Order" column to set the order the buttons appear in on the front end, then click "Save Changes" below to apply it. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [musiclink] shortcode is used. Use the arrows in the "Order" column to set the order the buttons appear in on the front end, then click "Save Changes" below to apply it. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below. In the "Background" column, pick a colour to sit behind the icon (useful for transparent PNGs) or tick "None (transparent)" to keep today\'s look - the 32px preview updates immediately; a saved colour is applied to the icon itself on the front end.', 'v4v-musiclink' ); ?>
 							</p>
 							<script>
 							(function () {
@@ -573,6 +616,25 @@ class V4V_Music_Link_Resolver {
 								} );
 
 								v4vRenumberApps();
+							})();
+							(function () {
+								function v4vUpdateAppBg( row ) {
+									if ( ! row ) {
+										return;
+									}
+									var none    = row.querySelector( '.v4v-app-bg-none' );
+									var color   = row.querySelector( '.v4v-app-bg-color' );
+									var preview = row.querySelector( '.v4v-app-icon-preview' );
+									if ( ! none || ! color || ! preview ) {
+										return;
+									}
+									preview.style.backgroundColor = none.checked ? '' : color.value;
+								}
+
+								document.querySelectorAll( '.v4v-app-bg-none, .v4v-app-bg-color' ).forEach( function ( input ) {
+									input.addEventListener( 'change', function () { v4vUpdateAppBg( input.closest( '.v4v-app-row' ) ); } );
+									input.addEventListener( 'input', function () { v4vUpdateAppBg( input.closest( '.v4v-app-row' ) ); } );
+								} );
 							})();
 							</script>
 						</td>
@@ -3144,6 +3206,7 @@ JS;
 			?>
 				<ul class="v4v-musiclink-list"<?php echo $random_order ? ' data-v4v-shuffle="1"' : ''; ?>>
 					<?php foreach ( $links as $slug => $link ) : ?>
+						<?php $icon_bg = $this->app_icon_bg( $slug ); ?>
 						<li class="v4v-musiclink-item v4v-musiclink-<?php echo esc_attr( $slug ); ?>">
 							<a href="<?php echo esc_url( $link['url'] ); ?>" target="_blank" rel="noopener noreferrer">
 								<img
@@ -3153,6 +3216,9 @@ JS;
 									width="40"
 									height="40"
 									loading="lazy"
+									<?php if ( '' !== $icon_bg ) : ?>
+									style="background-color: <?php echo esc_attr( $icon_bg ); ?>"
+									<?php endif; ?>
 								/>
 								<span><?php echo esc_html( $link['label'] ); ?></span>
 							</a>
