@@ -3,6 +3,18 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver (v4v-musiclink) — [1.22.30] - 2026-10-06
+
+### Security
+
+- **Stored-link validation now fails closed for domainless apps** — `is_valid_stored_url()` used to accept *any* https host whenever the app's registry entry had no `domain` key (dead code today — all four apps declare a domain — but a latent footgun: a future registry entry that forgot `domain` would have let an arbitrary https URL be stored and rendered as a front-end `href`). The function now rejects outright when there is no registry domain to positively match against, so an unknown or incomplete app entry can never open the check to foreign hosts (security review 2026-10-06, finding 1). Behaviour for the four registry apps (exact domain or subdomain, https-only) is unchanged. `test_stored_links` grows 384 → 390: three pins per plugin — a domainless app slug fails closed, a registry app still accepts its own host, and a domainless slug rejects even that same host.
+
+## Resolver Pro (v4v-musiclink-pro) — [1.20.34] - 2026-10-06
+
+### Security
+
+- **Stored-link validation now fails closed for domainless apps** — identical to Resolver 1.22.30, mirrored into Pro's `is_valid_stored_url()`: a registry entry without a `domain` key (or an unknown app slug) now rejects the URL instead of accepting any https host, closing the fail-open branch the same-day security review flagged. The same three pins run against Pro in `test_stored_links`.
+
 ## Resolver (v4v-musiclink) — [1.22.29] - 2026-10-06
 
 ### Added

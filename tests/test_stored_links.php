@@ -952,6 +952,24 @@ foreach ( $classes as $class => $cfg ) {
 	$row = $wpdb->row_by_hash( $table, $hash );
 	check( "[$class] H5 unknown link field rejected", $row && $kept === $row['fountain_url'] && false !== strpos( (string) $GLOBALS['redirected_to'], 'sl_error=1' ), var_export( $row ? $row['fountain_url'] : null, true ) );
 
+	// Fail closed for an app with no registry domain (security review
+	// 2026-10-06): no known domain means no host can be matched, so the
+	// https-only fallback that used to accept ANY host is gone.
+	check(
+		"[$class] H5 domainless app slug fails closed",
+		false === call_private( $obj, 'is_valid_stored_url', array( 'https://anything.example/path', 'no_such_app' ) )
+	);
+	// The registry-backed paths are unchanged: exact domain accepted...
+	check(
+		"[$class] H5 registry app still accepts its own host",
+		true === call_private( $obj, 'is_valid_stored_url', array( 'https://fountain.fm/episode/X', 'fountain' ) )
+	);
+	// ...and an unknown slug rejects even that same host.
+	check(
+		"[$class] H5 domainless slug rejects a registry host too",
+		false === call_private( $obj, 'is_valid_stored_url', array( 'https://fountain.fm/episode/X', 'no_such_app' ) )
+	);
+
 	// --- H6: a subdomain of the app domain is allowed, blanking is allowed
 	reset_state();
 	$id = $seed( $hash, $album, $track, array( 'fountain_url' => 'https://fountain.fm/episode/OLD' ) );

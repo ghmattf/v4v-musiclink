@@ -457,11 +457,43 @@ README usage sections for both versions gain the attribute.
 
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
+- **Standard-plugin security review** (2026-10-06): no critical or
+  high-severity findings across every surface (shortcode intake, output
+  escaping, admin-post nonces/caps, REST gate, prepared SQL, fixed-host
+  outbound HTTP with `redirection => 0`, no dangerous sinks). Its four
+  low findings are resolved below or shipped: stored-URL fail-closed fix
+  released as Resolver 1.22.30 / Pro 1.20.34 (see CHANGELOG).
 - **O20 live-harness 404s** (closed 2026-10-05): duplicate of O9 - the
-`fountain_candidate_test`/`fountain_case_test` 404s are stale hardcoded
-`next-action` fixtures against fountain.fm (the originally recorded
-`api.musicindex.org` host was wrong); O9's detect-don't-embed plan is
-the work. Re-open only to triage that plan.
+  `fountain_candidate_test`/`fountain_case_test` 404s are stale hardcoded
+  `next-action` fixtures against fountain.fm (the originally recorded
+  `api.musicindex.org` host was wrong); O9's detect-don't-embed plan is
+  the work. Re-open only to triage that plan.
+- **http:// artwork accepted - known issue, no current fix, closed**
+  (security review finding 2, decided 2026-10-06): tightening
+  `handle_update_cache_row()`'s art branch to https-only was declined -
+  upstream artwork URLs can be http-only and the site cannot force https.
+  Accepted impacts: strict browsers may auto-upgrade or block the art
+  `<img>` (worst case: missing artwork), and an on-path attacker on the
+  http hop could substitute image bytes; no script execution or session
+  leakage is possible from an image, and `esc_url()` still governs what
+  can be stored. Do not re-propose the https-only art rule.
+- **No rate limit on standard's REST search - known issue, closed**
+  (security review finding 3, decided 2026-10-06): `rest_search()` and
+  its siblings are `manage_options` + nonce gated with deliberately no
+  per-IP limiter (documented in the `register_rest_routes()` docblock);
+  worst case is an admin generating bounded upstream MI load (3 batches
+  of 100 per query, 8 hits resolved per page). Revisit only if the routes
+  ever become non-admin or public, where Pro's per-IP relay limiter would
+  then apply.
+- **Block builder `clean_value()` strips dangerous characters from GUIDs -
+  known issue, closed** (security review finding 4, decided 2026-10-06):
+  the block UI deletes `"'<>&` from album/track GUID fields (defence in
+  depth for the saved shortcode attribute; the server-side
+  `sanitize_text_field()` + `guard_guid()` remain the authority), which
+  can mangle a guid containing e.g. an apostrophe. No plugin fix: GUIDs
+  should not use dangerous characters in the first place, and such guids
+  should be corrected on the Music Index feed itself. Do not re-propose a
+  client-side relaxation without a feed-side fix.
 - **Fountain self-heal stays inline** (security review finding #5):
   declined 2026-09-24 - no refactor of the inline self-heal.
 - **Telegram stale preview** (investigated 2026-09-25): phafe.com serves
