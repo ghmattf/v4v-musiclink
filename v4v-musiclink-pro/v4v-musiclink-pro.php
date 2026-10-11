@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.33
+ * Version: 1.20.34
  * Author: Matt Finlay
  *
  * USAGE:
@@ -1331,8 +1331,11 @@ class V4V_Music_Link_Resolver_Pro {
 	 * Whether an admin-supplied stored link is acceptable: always https,
 	 * and on the app's own domain when we know it (fountain.fm for
 	 * Fountain, including subdomains - matching the trust rule used for
-	 * Fountain's script discovery). An unknown/future app gets the https
-	 * check only, since there is no registry domain to compare against.
+	 * Fountain's script discovery). An app with no registry domain
+	 * (unknown slug or a future entry missing its `domain` key) fails
+	 * closed: with no known domain there is no host to positively match,
+	 * so rejecting outright is the only safe answer (security review
+	 * 2026-10-06).
 	 */
 	private function is_valid_stored_url( $url, $app ) {
 		$parts = wp_parse_url( $url );
@@ -1343,7 +1346,7 @@ class V4V_Music_Link_Resolver_Pro {
 
 		$registry = $this->app_registry();
 		if ( ! isset( $registry[ $app ]['domain'] ) ) {
-			return true;
+			return false;
 		}
 
 		$host   = strtolower( $parts['host'] );
@@ -2569,7 +2572,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.33', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.34', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
