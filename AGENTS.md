@@ -78,5 +78,5 @@ Applies to code releases only (never for docs-only changes):
    `Resolver a.b.c / Pro d.e.f: …`. Step 3 already committed the plugin files;
    `tmp/` and `archive/` stay uncommitted. Never `git add -A` here.
 6. Annotated, `v`-prefixed tags: `git tag -a vx.y.z -m "Resolver x.y.z"` (or
-   `"Pro x.y.z"`). Nothing is pushed (no remote configured).
+   `"Pro x.y.z"`). Then push to GitHub: `git push && git push origin vx.y.z`.
 7. Update `OUTSTANDING.md` statuses in the same turn; remove any item just shipped.

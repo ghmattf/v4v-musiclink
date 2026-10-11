@@ -87,8 +87,8 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
 6. Commit the docs: `git add CHANGELOG.md && git commit -m "Resolver x.y.z: …"` —
    plus `OUTSTANDING.md` if any statuses changed. Never `git add -A` (it would
    sweep in unrelated edits and local scratch).
-7. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` — local only,
-   no remote is configured.
+7. Tag each released plugin version: `git tag -a vX.Y.Z -m "…"` — then push the
+   release with `git push && git push origin vX.Y.Z` (GitHub: `ghmattf/v4v-musiclink`).
 
 ## Naming conventions (why they matter)
 
