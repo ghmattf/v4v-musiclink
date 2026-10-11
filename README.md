@@ -81,6 +81,6 @@ Linting and testing use a **portable PHP CLI kept in `php/`** — there is no sy
 ./php/php -l v4v-musiclink/v4v-musiclink.php
 ```
 
-Run the whole regression suite with `for f in tmp/test_*.php tmp/*_test.php; do ./php/php "$f"; done` — see the [Regression tests section of CONTRIBUTING.md](CONTRIBUTING.md#regression-tests).
+Run the whole regression suite with `for f in tests/test_*.php tests/*_test.php; do ./php/php "$f"; done` — see the [Regression tests section of CONTRIBUTING.md](CONTRIBUTING.md#regression-tests).
 
 If you are an agent or new contributor: **before you can lint or run any PHP, run `./php/install.sh` once**, then always invoke `./php/php`. See the [PHP runtime section of CONTRIBUTING.md](CONTRIBUTING.md#php-runtime-required-for-linting-and-tests) for details.

@@ -41,43 +41,6 @@ is currently UTC, which hides the bug).
 
 ---
 
-## O4. Promote the harness suite from `tmp/` to a tracked `tests/` directory
-
-**Status: On hold** (user deferred 2026-09-25).
-
-**What:** the whole regression suite lives in gitignored `tmp/`, so none of
-it is versioned: `test_log_scope.php`, `test_app_launch.php` (needs
-`tmp/wpstub/` for the dbDelta stub, loaded via `ABSPATH = __DIR__ .
-'/wpstub/'`), `test_log_limits.php`, `test_search_pagination.php`,
-`test_stored_links.php` (its own in-memory `$wpdb` double, written 2026-09-26),
-`fountain_fix_test.php`, `mi_ttl_test.php`, `v4vmusic_url_test.php`,
-`fountain_live_test.php` (**live network** - hits fountain.fm, can
-flake/timeout; treat as informational and re-run once before concluding),
-`missing_params_heading_test.php`, `canonical_guid_test.php`,
-`test_fountain_path.php`, plus the two live Fountain probes
-`fountain_candidate_test.php` / `fountain_case_test.php` (no assertion
-counter) and the browser e2e in `tmp/e2e/` (`gen_page.php`, `router.php` -
-captured HTML files in that dir are scratch). Baseline as of 2026-10-05
-(Resolver 1.22.24 / Pro 1.20.30): 14 files - the 11 offline harnesses are
-green (962 counted assertions) and `tmp/e2e/gen_page.php` self-checks pass;
-`fountain_live_test` is **20/20** again (O11 fixed), and the two live
-Fountain probes still print nothing per O9. The stale homepage-only port
-`tmp/fountain_probe.php` was retired the same day (its first-candidate
-logic no longer matched the plugin; `probe_sweep` / `probe_candidates` /
-`probe_window` / `probe_autodetect_trace` / `probe_woman` are the live
-diagnostics now).
-
-**Plan sketch:** create tracked `tests/`; `git mv` the ten harnesses plus
-`wpstub/` (same directory depth as `tmp/`, so their
-`dirname( __DIR__ ) . '/...'` plugin includes keep working); move the two
-runnable e2e scripts too but leave captured HTML in `tmp/`; document the
-run command (`./php/php tests/<file>.php`, toolchain installed by
-`php/install.sh`) in CONTRIBUTING.md or README; mark `fountain_live_test`
-as network-dependent; add `tests/` to the AGENTS.md project scope and
-update its release-flow step. Remove this item when shipped.
-
----
-
 ## O5. Settings readout: last Fountain attempt
 
 **Status: On hold** (user deferred 2026-09-25).

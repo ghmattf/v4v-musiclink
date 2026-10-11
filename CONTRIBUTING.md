@@ -16,15 +16,16 @@
 
 ## Regression tests
 
-The suite is a set of standalone harnesses in `tmp/` (gitignored local scratch until the tracked `tests/` directory lands - tracked in `OUTSTANDING.md` as O4). Run them all from the project root after any change, and always before a release:
+The suite is a set of standalone harnesses in the tracked `tests/` directory (plus `tests/wpstub/` WordPress stubs, the `tests/fx_*.txt` captured-response fixtures, and `tests/e2e/` scripts). Run them all from the project root after any change, and always before a release:
 
 ```bash
-for f in tmp/test_*.php tmp/*_test.php; do ./php/php "$f"; done
+for f in tests/test_*.php tests/*_test.php; do ./php/php "$f"; done
 ```
 
 - Each harness prints `N passed, 0 failed` and exits non-zero on any failure; expect `0 failed` from every file.
-- `tmp/fountain_live_test.php`, `tmp/fountain_candidate_test.php` and `tmp/fountain_case_test.php` hit live endpoints and can flake - re-run a failing one once before concluding it is a real regression.
-- `./php/php tmp/e2e/gen_page.php` is an extra smoke check: it regenerates `tmp/e2e/*.html` and verifies the rendered page and script stack.
+- `tests/fountain_live_test.php`, `tests/fountain_candidate_test.php` and `tests/fountain_case_test.php` are **live-network** — they hit fountain.fm on every run and can flake or time out — so re-run a failing one once before concluding it is a real regression. (`fountain_candidate_test` / `fountain_case_test` also currently 404 on rotated `next-action` tokens: stale fixtures tracked as `OUTSTANDING.md` O9, not plugin regressions.)
+- `./php/php tests/e2e/gen_page.php` is an extra smoke check: it regenerates the captured pages in gitignored `tmp/e2e/` (`page.html`, `search.html`) and verifies the rendered page and script stack.
+- Anything else under `tmp/` (live probes, captured logs/HTML, scratch) is gitignored and not part of the suite.
 
 ## Version control
 
@@ -79,7 +80,7 @@ v4v-musiclink-pro/archive/v4v-musiclink-pro-v1.20.4.php
    ./php/php -l v4v-musiclink/v4v-musiclink.php && ./php/php -l v4v-musiclink-pro/v4v-musiclink-pro.php
    ```
 3. Run the regression harnesses - see [Regression tests](#regression-tests)
-   (all `tmp/test_*.php` / `tmp/*_test.php` files must report `0 failed`).
+   (all `tests/test_*.php` / `tests/*_test.php` files must report `0 failed`).
 4. Bump version(s): `./bump-version.sh` (or `standard` / `pro`) — this commits the
    bumped plugin file(s) itself, subject `Bump Resolver x.y.z` / `Bump Pro x.y.z`.
 5. Add a `CHANGELOG.md` entry for the new version(s).

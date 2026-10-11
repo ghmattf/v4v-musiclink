@@ -6,6 +6,8 @@ The project consists of:
 
 - `v4v-musiclink/v4v-musiclink.php` — standard plugin (current release)
 - `v4v-musiclink-pro/v4v-musiclink-pro.php` — Pro plugin (current release)
+- `tests/` — tracked regression suite (`test_*.php` / `*_test.php` harnesses,
+  `wpstub/`, `fx_*.txt` fixtures, `e2e/` scripts)
 - `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `OUTSTANDING.md`
 - `bump-version.sh`, `php/install.sh`
 
@@ -27,7 +29,8 @@ for backup/history only and are **not** part of the project.
 
 ## Also not part of the project
 
-- `tmp/` — gitignored local scratch (test harnesses, probes, downloaded archives).
+- `tmp/` — gitignored local scratch (live probes, captured e2e HTML/logs,
+  downloaded archives); the harness suite lives in tracked `tests/`.
 - `php/php` and `php/*.tar.gz` — gitignored downloaded toolchain; `php/install.sh`
   is the tracked source of truth.
 - `.env*` — never read or report on these.
@@ -58,11 +61,10 @@ Applies to code releases only (never for docs-only changes):
 
 1. Lint both plugin files: `./php/php -l <file>` (use the project PHP from
    `php/install.sh`; no system PHP).
-2. Run the regression harnesses: `./php/php tmp/<harness>.php` for each
-   `tmp/test_*.php` / `tmp/*_test.php` (14 files; `fountain_live_test`,
+2. Run the regression harnesses: `./php/php tests/<harness>.php` for each
+   `tests/test_*.php` / `tests/*_test.php` (15 files; `fountain_live_test`,
    `fountain_candidate_test` and `fountain_case_test` are live-network and
-   can flake — re-run a flaky one once before concluding). Until
-   `OUTSTANDING.md` item O4 lands, they live in gitignored `tmp/`.
+   can flake — re-run a flaky one once before concluding).
 3. `./bump-version.sh standard|pro|both` — bumps the plugin header and the script
    cache-buster, refreshes the backup copies under `archive/` (gitignored, never
    committed), and **commits the bumped plugin file(s) itself** — only those
