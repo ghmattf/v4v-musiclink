@@ -2,7 +2,7 @@
 /**
  * Plugin Name: V4V Music Link Resolver Pro
  * Description: PRO EDITION - isolated copy of V4V Music Link Resolver with entirely separate settings/options/cache/database storage from the standard edition, safe to run alongside it on the same site without conflicts. Uses the [musiclink_pro] shortcode (not [musiclink]). Provides guid-based cross-platform music links (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) based on ?album={guid}&track={guid} in the page URL. With no guid supplied, shows a Music Index search box instead.
- * Version: 1.20.34
+ * Version: 1.20.35
  * Author: Matt Finlay
  *
  * USAGE:
@@ -148,6 +148,16 @@
  * Cache tab to force a re-search). Failure throttles (not-found /
  * outage) stay in short-lived transients.
  *
+ * RESOLVE BUDGET: while a share page (or its og:/document-title tags)
+ * resolves visitor-supplied ?album=/?track= guids, each actual upstream
+ * attempt - one Music Index GET, one Fountain POST - spends a per-IP
+ * budget of 60/minute, so churning distinct guids cannot force unbounded
+ * outbound requests. Cached serves and remembered misses are free; the
+ * search relay, the log beacons and the background refresh are already
+ * bounded and never spend it. Over budget the page falls back exactly
+ * like an unresolvable guid (search view / Fountain search URL), and
+ * nothing is remembered against the guid - see is_rate_limited().
+ *
  * Icons are pulled live from each app's own favicon via a favicon service
  * (no logo assets are stored or reproduced by this plugin).
  */
@@ -221,6 +231,18 @@ class V4V_Music_Link_Resolver_Pro {
 	const SEARCH_CACHE_SCHEMA    = 2;
 	const SEARCH_CACHE_TTL       = HOUR_IN_SECONDS;
 
+	// Per-IP budget, attempts per minute, for the visitor-driven resolve
+	// path (security review O25): Music Index GETs and Fountain POSTs
+	// issued while rendering a ?album=/?track= share page or its
+	// og:/document-title tags. 60/min is generous next to the search
+	// relay's own 30/min cap - the plugin's own discovery route is
+	// already the slower of the two - while bounding a client that
+	// churns distinct guids, which previously cost one blocking
+	// upstream call each with no limit at all. Cached serves,
+	// remembered misses, the background refresh, the beacons and the
+	// search relay never spend it (see $resolve_budgeted).
+	const RESOLVE_RATE_MAX = 60;
+
 	/**
 	 * HTTP status of the most recent mi_api_get() call (0 = transport
 	 * failure or an undecodable body). Lets mi_get_feed()/mi_get_track()
@@ -253,6 +275,18 @@ class V4V_Music_Link_Resolver_Pro {
 	 * trigger a refresh (they may still fill an absent row).
 	 */
 	private $mi_refresh_allowed = false;
+
+	/**
+	 * Whether upstream resolve attempts in this request spend the
+	 * per-IP 'resolve' budget (RESOLVE_RATE_MAX per minute). Opt-in like
+	 * $mi_refresh_allowed: render() and compute_preview_fields() turn it
+	 * on - the two paths driven by visitor-supplied ?album=/?track=
+	 * query args (security review O25). The log beacons and the search
+	 * relay are already bounded by their own budgets, and
+	 * run_queued_mi_refresh() clears this on entry so a background pull
+	 * queued from the same request always runs.
+	 */
+	private $resolve_budgeted = false;
 
 	/**
 	 * Rows queued for a background Music Index pull this request, as
@@ -2572,7 +2606,7 @@ class V4V_Music_Link_Resolver_Pro {
 		wp_enqueue_style( 'v4v-musiclink-pro' );
 		wp_add_inline_style( 'v4v-musiclink-pro', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.34', true );
+		wp_register_script( 'v4v-musiclink-pro', false, array(), '1.20.35', true );
 		wp_enqueue_script( 'v4v-musiclink-pro' );
 		wp_localize_script( 'v4v-musiclink-pro', 'v4vMusicLinkPro', array(
 			'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
@@ -2985,6 +3019,12 @@ JS;
 	 * in how they get the tags into the page.
 	 */
 	private function compute_preview_fields( $post ) {
+		// Runs from wp_head on the same visitor-controlled query args as
+		// render() - and before it - so it spends the same resolve budget;
+		// otherwise the og: fetch would be an unbudgeted bypass for the
+		// only upstream call the request makes (security review O25).
+		$this->resolve_budgeted = true;
+
 		$album = $this->get_guid_arg( 'album' );
 		$track = $this->get_guid_arg( 'track' );
 
@@ -3116,6 +3156,12 @@ JS;
 		// search box, the log beacons and the og: preview all call
 		// resolve_release_meta() without this flag and can never queue one.
 		$this->mi_refresh_allowed = true;
+
+		// ...and the context that spends the per-IP resolve budget:
+		// ?album=/?track= are visitor-controlled, so every cache miss
+		// this render may trigger would otherwise be an unauthenticated,
+		// uncapped outbound request (security review O25).
+		$this->resolve_budgeted = true;
 
 		$atts = shortcode_atts( array(
 			'album'  => '',
@@ -3608,6 +3654,16 @@ JS;
 		// the stored value and self-heal would re-derive it forever. A miss
 		// cached for candidate #1 does not block candidate #2: those caches
 		// are keyed per id (see fountain_try_resolve()).
+		//
+		// Over budget: stop before the self-heal crawl - seed pages plus
+		// chunk downloads are the expensive half - as well as before any
+		// candidate POSTs. The button falls back to the Fountain search
+		// URL this render and retries on a later view; the crawl keeps
+		// its own 15-minute throttle regardless (security review O25).
+		if ( $this->resolve_budgeted && $this->is_rate_limited( 'resolve', self::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS ) ) {
+			return null;
+		}
+
 		foreach ( $this->fountain_autodetect_next_actions() as $candidate ) {
 			if ( $candidate === $next_action ) {
 				continue; // Already tried (and failed) above - don't repeat it.
@@ -3656,6 +3712,16 @@ JS;
 		$cached    = get_transient( $cache_key );
 		if ( false !== $cached ) {
 			return $cached ? $cached : null;
+		}
+
+		// Same per-IP resolve budget as the Music Index half, charged
+		// only when a POST would actually go out (the cached hit above
+		// is free): a rejection returns before any HTTP and writes no
+		// miss entry, so the window - not the cache - is what remembers
+		// it (security review O25). last_fountain_hits_parsed stays
+		// false, which the caller reads as "got no answer".
+		if ( $this->resolve_budgeted && $this->is_rate_limited( 'resolve', self::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS ) ) {
+			return null;
 		}
 
 		// redirection => 0: never let a remote host bounce an outbound
@@ -4079,6 +4145,17 @@ JS;
 			return null;
 		}
 
+		// Charge the attempt itself, after the remembered-miss short
+		// circuit so cached misses stay free: over budget means no HTTP
+		// and - deliberately - no negative entry, so nothing is
+		// remembered against the guid beyond the window and a retry
+		// resolves normally once the budget frees (rejected requests
+		// never advance the counter). Only the visitor-driven paths set
+		// $resolve_budgeted - see the property docblock.
+		if ( $this->resolve_budgeted && $this->is_rate_limited( 'resolve', self::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS ) ) {
+			return null;
+		}
+
 		$body = $this->mi_api_get( '/feeds/' . rawurlencode( $feed_guid ) );
 
 		if ( empty( $body['data']['title'] ) ) {
@@ -4100,6 +4177,11 @@ JS;
 		$negative_key = $this->mi_negative_key( 'track', $feed_guid, $track_guid );
 
 		if ( false !== get_transient( $negative_key ) ) {
+			return null;
+		}
+
+		// Same per-IP resolve budget as the feed half - see there.
+		if ( $this->resolve_budgeted && $this->is_rate_limited( 'resolve', self::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS ) ) {
 			return null;
 		}
 
@@ -4274,6 +4356,13 @@ JS;
 	 * marker expires after a minute).
 	 */
 	public function run_queued_mi_refresh() {
+		// Shutdown runs inside the request that may have enabled the
+		// resolve budget (render / og above), but a queued background
+		// pull is already bounded - one attempt per row per minute - and
+		// must keep working while the site is busy, so it never spends
+		// it (security review O25).
+		$this->resolve_budgeted = false;
+
 		if ( empty( $this->mi_refresh_pending ) ) {
 			return;
 		}
