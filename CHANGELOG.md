@@ -3,7 +3,7 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
-## Resolver Pro (v4v-musiclink-pro) — [1.20.35] - 2026-10-06
+## Resolver Pro (v4v-musiclink-pro) — [1.20.35] - 2026-10-11
 
 ### Security
 

@@ -467,7 +467,7 @@ README usage sections for both versions gain the attribute.
   `v4v-musiclink-pro.php` at 1.20.34 - every surface verified clean except
   one low availability finding (the unbudgeted visitor-driven resolve
   path), fixed as Pro 1.20.35 (the per-IP `resolve` budget, formerly
-  recorded as O25 - shipped the same day). Checked: shortcode/`$_GET`
+  recorded as O25 - shipped 2026-10-11). Checked: shortcode/`$_GET`
   intake (`sanitize_text_field` + length-only `guard_guid`), output
   escaping everywhere (render HTML, search UI, social meta, document
   title, Log/Reports/Cache tables, settings fields, `textContent`-only JS
