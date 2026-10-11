@@ -463,6 +463,26 @@ README usage sections for both versions gain the attribute.
   outbound HTTP with `redirection => 0`, no dangerous sinks). Its four
   low findings are resolved below or shipped: stored-URL fail-closed fix
   released as Resolver 1.22.30 / Pro 1.20.34 (see CHANGELOG).
+- **Pro-plugin security review** (2026-10-06): full read of
+  `v4v-musiclink-pro.php` at 1.20.34 - every surface verified clean except
+  one low availability finding (the unbudgeted visitor-driven resolve
+  path), fixed as Pro 1.20.35 (the per-IP `resolve` budget, formerly
+  recorded as O25 - shipped the same day). Checked: shortcode/`$_GET`
+  intake (`sanitize_text_field` + length-only `guard_guid`), output
+  escaping everywhere (render HTML, search UI, social meta, document
+  title, Log/Reports/Cache tables, settings fields, `textContent`-only JS
+  DOM building - `innerHTML` used solely to clear), all four admin-post
+  handlers nonce + `manage_options`, all three AJAX endpoints nonce-gated
+  (search 30/min, beacons per-IP budgets; public-page nonces by design and
+  documented), no REST routes, every `$wpdb` call prepared or static with
+  whitelisted columns, outbound HTTP fixed-host with `redirection => 0`
+  (MI API; fountain.fm seeds/chunks exact-host + HTTPS at ~3816-3829, 15-min
+  crawl throttle; next-action tokens hex-only or `sanitize_text_field`'d, so
+  no header injection), no dangerous sinks (no eval/unserialize/extract/
+  file/shell), canonical/og rebuild from sanitized args only, Reports dates
+  via `createFromFormat('Y-m-d')`. Pro's artwork edit branch shares the
+  declined http:// art rule (see below); its admin post handlers mirror
+  standard's.
 - **O20 live-harness 404s** (closed 2026-10-05): duplicate of O9 - the
   `fountain_candidate_test`/`fountain_case_test` 404s are stale hardcoded
   `next-action` fixtures against fountain.fm (the originally recorded

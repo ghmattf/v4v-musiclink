@@ -19,6 +19,11 @@
  *     on): off makes both beacons acknowledge with no row, no budget and
  *     no Music Index call, and log_view() itself refuses as the
  *     write-path choke point.
+ *   - the visitor-driven resolve budget (security review O25): page-render
+ *     and og:/title upstream attempts (Music Index GET, Fountain POST)
+ *     spend a per-IP budget, while beacons/search/background stay exempt;
+ *     a rejection costs no HTTP, writes no miss entry and never advances
+ *     the counter.
  *
  * Run:  ./php/php tmp/test_log_limits.php
  */
@@ -102,6 +107,10 @@ function wp_unslash( $s ) { return $s; }
 function absint( $v ) { return abs( (int) $v ); }
 function current_time( $type = 'mysql' ) { return '2026-09-24 12:00:00'; }
 function get_date_from_gmt( $ts, $format = 'Y-m-d H:i:s' ) { return $ts; }
+function get_the_title( $post = 0 ) { return ''; }
+function get_theme_mod( $name, $default = false ) { return $default; }
+function wp_get_attachment_image_url( ...$a ) { return false; }
+function get_site_icon_url( $size = 512, $post = 0 ) { return ''; }
 
 function shortcode_atts( $pairs, $atts, $shortcode = '' ) {
 	$atts = (array) $atts;
@@ -262,6 +271,13 @@ function wp_remote_get( $url, $args = array() ) {
 	return new WP_Error();
 }
 
+// Fountain POST spy: records every attempt, answers transport failure.
+$GLOBALS['__post_calls'] = array();
+function wp_remote_post( $url, $args = array() ) {
+	$GLOBALS['__post_calls'][] = $url;
+	return new WP_Error();
+}
+
 require_once dirname( __DIR__ ) . '/v4v-musiclink-pro/v4v-musiclink-pro.php';
 
 // --- Harness helpers ---
@@ -285,6 +301,14 @@ function call_private( $object, $method, ...$args ) {
 	$ref = new ReflectionMethod( get_class( $object ), $method );
 	return $ref->invokeArgs( $object, $args );
 }
+function set_prop( $object, $prop, $value ) {
+	$ref = new ReflectionProperty( get_class( $object ), $prop );
+	$ref->setValue( $object, $value );
+}
+function get_prop( $object, $prop ) {
+	$ref = new ReflectionProperty( get_class( $object ), $prop );
+	return $ref->getValue( $object );
+}
 function prepared_like( $needle ) {
 	global $wpdb;
 	$out = array();
@@ -303,6 +327,7 @@ function reset_state() {
 	$_POST               = array();
 	$_GET                = array();
 	$GLOBALS['__http_calls']     = array();
+	$GLOBALS['__post_calls']     = array();
 	$GLOBALS['__transient_sets'] = array();
 }
 function rl_key( $bucket, $ip ) {
@@ -617,6 +642,139 @@ call_private( $plugin, 'log_view', 'Miles Davis', 'Kind of Blue', 'So What', 'st
 check( 'T15 log_view writes again once on', count( $wpdb->inserts ), 1 );
 unset( $GLOBALS['__options']['v4v_musiclink_pro_log_enabled'] );
 
+clear_rate_buckets();
+
+/* ------------------------------------------------------------------------
+ * Resolve budget (security review O25): the visitor-driven page-render and
+ * og:/title paths spend a per-IP budget on each actual upstream attempt;
+ * exempt paths (beacons/search/background) and cached or remembered
+ * lookups never do; a rejection costs no HTTP, writes no miss entry and
+ * never advances the counter.
+ * ---------------------------------------------------------------------- */
+reset_state();
+clear_rate_buckets();
+$_SERVER['REMOTE_ADDR'] = '203.0.113.50';
+$rl_key = rl_key( 'resolve', '203.0.113.50' );
+set_prop( $plugin, 'resolve_budgeted', false );
+
+// R1: flag off (the beacon/search/background contract): an exhausted
+// budget is irrelevant - the fetch still runs and the bucket is untouched.
+set_transient( $rl_key, V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS );
+$n   = count( $GLOBALS['__http_calls'] );
+$res = call_private( $plugin, 'mi_fetch_feed', 'FEED1' );
+check( 'R1 exempt path fetches over budget', $res['title'] ?? null, 'Kind of Blue' );
+check( 'R1 and no Music Index call was withheld', count( $GLOBALS['__http_calls'] ), $n + 1 );
+check( 'R1 and the exempt path never spends the resolve bucket', rl_hits( 'resolve', '203.0.113.50' ), V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX );
+
+// R2: flag on + budget free: the attempt runs and spends exactly one unit.
+set_prop( $plugin, 'resolve_budgeted', true );
+delete_transient( $rl_key );
+$n   = count( $GLOBALS['__http_calls'] );
+$res = call_private( $plugin, 'mi_fetch_feed', 'FEED2' );
+check( 'R2 a budgeted fetch runs while the budget is free', $res['title'] ?? null, 'Love Songs' );
+check( 'R2 with the Music Index call made', count( $GLOBALS['__http_calls'] ), $n + 1 );
+check( 'R2 and exactly one unit spent', rl_hits( 'resolve', '203.0.113.50' ), 1 );
+
+// R3/R4: flag on + exhausted: null, no HTTP, nothing remembered against
+// the guid, counter left exactly at the cap.
+set_transient( $rl_key, V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS );
+$n   = count( $GLOBALS['__http_calls'] );
+$neg = call_private( $plugin, 'mi_negative_key', 'feed', 'FEED_GONE', '' );
+$res = call_private( $plugin, 'mi_fetch_feed', 'FEED_GONE' );
+check( 'R3 an over-budget fetch returns null', $res, null );
+check( 'R3 without any Music Index call', count( $GLOBALS['__http_calls'] ), $n );
+check( 'R3 and no negative entry written', isset( $GLOBALS['__transients'][ $neg ] ), false );
+check( 'R4 the rejected attempt never advances the counter', rl_hits( 'resolve', '203.0.113.50' ), V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX );
+
+// R5: the track half is gated the same way.
+$n   = count( $GLOBALS['__http_calls'] );
+$res = call_private( $plugin, 'mi_fetch_track', 'FEED1', 'TRK1' );
+check( 'R5 the track fetch is gated too', $res, null );
+check( 'R5 and reaches no Music Index', count( $GLOBALS['__http_calls'] ), $n );
+
+// R6: a remembered Fountain hit costs nothing even over budget.
+$hit_key = 'fountain_id_pro_v5_' . md5( 'FEED1|act' );
+set_transient( $hit_key, array( 'id' => 'abc123', 'type' => 'track' ), MINUTE_IN_SECONDS );
+$n_post = count( $GLOBALS['__post_calls'] );
+$res    = call_private( $plugin, 'fountain_try_resolve', 'FEED1', 'Kind of Blue', 'act' );
+check( 'R6 a cached Fountain hit still resolves over budget', $res['id'] ?? null, 'abc123' );
+check( 'R6 with no POST issued', count( $GLOBALS['__post_calls'] ), $n_post );
+check( 'R6 and no unit spent on the cached hit', rl_hits( 'resolve', '203.0.113.50' ), V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX );
+delete_transient( $hit_key );
+
+// R7: an uncached Fountain attempt is stopped before the POST.
+$n_post = count( $GLOBALS['__post_calls'] );
+$res    = call_private( $plugin, 'fountain_try_resolve', 'FEED1', 'Kind of Blue', 'act' );
+check( 'R7 an over-budget Fountain attempt returns null', $res, null );
+check( 'R7 and never POSTs', count( $GLOBALS['__post_calls'] ), $n_post );
+
+// R8: fountain_resolve over budget skips candidate POSTs AND the self-heal
+// crawl (seed pages plus chunk downloads).
+$n_get  = count( $GLOBALS['__http_calls'] );
+$n_post = count( $GLOBALS['__post_calls'] );
+$res    = call_private( $plugin, 'fountain_resolve', 'FEED1', 'Kind of Blue' );
+check( 'R8 an over-budget resolve gives up without a link', $res, null );
+check( 'R8 with no Fountain POST', count( $GLOBALS['__post_calls'] ), $n_post );
+check( 'R8 and no self-heal crawl', count( $GLOBALS['__http_calls'] ), $n_get );
+
+// R9: the background pull runs inside the same budget-exhausted request
+// that enabled the budget - it never spends it and clears the flag on entry.
+$stale_row = (object) array(
+	'album_title'         => 'Kind of Blue',
+	'track_title'         => '',
+	'artist'              => 'Miles Davis',
+	'image_url'           => '',
+	'mi_updated_at'       => '2000-01-01 00:00:00',
+	'fountain_url'        => '',
+	'fountain_updated_at' => '',
+);
+$real_wpdb          = $GLOBALS['wpdb'];
+$GLOBALS['wpdb']    = new class( $stale_row ) extends Wpdb_Stub {
+	private $row;
+	public function __construct( $row ) { $this->row = $row; }
+	public function get_row( $sql ) { $this->queries[] = $sql; return $this->row; }
+};
+set_prop( $plugin, 'resolve_budgeted', true );
+set_prop( $plugin, 'mi_refresh_pending', array(
+	'h1' => array( 'kind' => 'feed', 'album' => 'FEED1', 'track' => '' ),
+) );
+set_transient( $rl_key, V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS );
+$n = count( $GLOBALS['__http_calls'] );
+$plugin->run_queued_mi_refresh();
+check( 'R9 the background pull runs despite an exhausted budget', count( $GLOBALS['__http_calls'] ), $n + 1 );
+check( 'R9 and never spends the resolve bucket', rl_hits( 'resolve', '203.0.113.50' ), V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX );
+check( 'R9 and clears the budget flag on entry', get_prop( $plugin, 'resolve_budgeted' ), false );
+$GLOBALS['wpdb'] = $real_wpdb;
+
+// R10: render() enables the budget for the page-render path.
+set_prop( $plugin, 'resolve_budgeted', false );
+$_GET = array();
+$plugin->render( array() );
+check( 'R10 render() turns the resolve budget on', get_prop( $plugin, 'resolve_budgeted' ), true );
+
+// R11: the og:/title computation enables it too, and its fetch spends a unit.
+set_prop( $plugin, 'resolve_budgeted', false );
+delete_transient( $rl_key );
+$_GET   = array( 'album' => 'FEED1' );
+$n      = count( $GLOBALS['__http_calls'] );
+$fields = call_private( $plugin, 'compute_preview_fields', null );
+check( 'R11 the og: computation turns the resolve budget on', get_prop( $plugin, 'resolve_budgeted' ), true );
+check( 'R11 and its fetch made the Music Index call', count( $GLOBALS['__http_calls'] ), $n + 1 );
+check( 'R11 and spent exactly one unit', rl_hits( 'resolve', '203.0.113.50' ), 1 );
+check( 'R11 with the release resolved', $fields['title'], 'Kind of Blue' );
+
+// R12: over budget the og: path falls back without any upstream call.
+set_transient( $rl_key, V4V_Music_Link_Resolver_Pro::RESOLVE_RATE_MAX, MINUTE_IN_SECONDS );
+$_GET   = array( 'album' => 'FEED_GONE' );
+$n      = count( $GLOBALS['__http_calls'] );
+$n_post = count( $GLOBALS['__post_calls'] );
+$fields = call_private( $plugin, 'compute_preview_fields', null );
+check( 'R12 an over-budget og: computation makes no Music Index call', count( $GLOBALS['__http_calls'] ), $n );
+check( 'R12 and no Fountain POST', count( $GLOBALS['__post_calls'] ), $n_post );
+check( 'R12 and falls back to the generic title', $fields['title'], '' );
+
+set_prop( $plugin, 'resolve_budgeted', false );
+$_GET = array();
 clear_rate_buckets();
 
 printf( "\n%d passed, %d failed\n", $pass, $fail );

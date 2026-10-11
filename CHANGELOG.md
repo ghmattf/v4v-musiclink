@@ -3,6 +3,12 @@
 All notable changes to the V4V MusicLink plugins are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/) and are tracked independently per plugin.
 
+## Resolver Pro (v4v-musiclink-pro) — [1.20.35] - 2026-10-06
+
+### Security
+
+- **Per-IP budget for visitor-driven upstream resolution** — the share page's `?album=`/`?track=` query args are visitor-controlled, and every cache miss used to cost an uncapped blocking outbound request: one Music Index GET (8 s ceiling) inside the page render plus, once a title resolved, one Fountain POST — repeatable without limit as an unauthenticated client churned distinct guids (security review 2026-10-06, finding O25; availability/abuse only, no data exposure). Each actual upstream attempt from the page-render path or the og:/document-title computation (`render()`, `compute_preview_fields()`) now spends a per-IP budget of 60/minute (`RESOLVE_RATE_MAX`, one shared `resolve` bucket through the existing `is_rate_limited()`, whose window semantics mean a rejected request never extends the block and no client can spend another's budget). A rejection is deliberately forgettable: no HTTP, no negative-cache entry — nothing is poisoned beyond the window, a retry resolves once the budget frees, and the page falls back exactly like an unresolvable guid (search view / Fountain search URL). Cached serves and remembered misses cost nothing, so a shared link still resolves once and then serves every visitor and og scraper from the cache row with zero upstream calls — viral traffic is unaffected. Exempt by design: the search relay and the log beacons (each already capped by its own budget) and the background Music Index refresh (`run_queued_mi_refresh()` clears the budget flag on entry, so one attempt per stale row per minute keeps running while the site is busy); the Fountain self-heal crawl keeps its own 15-minute throttle behind the same gate. `test_log_limits` grows 93 → 124: 31 `R*` pins covering the exempt path, budget-spent-only-on-real-attempts, no miss-entry poisoning, counter semantics, POST and self-heal-crawl suppression, the background exemption, and both flag setters.
+
 ## Resolver (v4v-musiclink) — [1.22.30] - 2026-10-06
 
 ### Security
