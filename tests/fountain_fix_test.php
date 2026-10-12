@@ -1,33 +1,12 @@
 <?php
 /**
- * Behavioural test for the Fountain direct-link fix (2026 restructure).
+ * The standard plugin's Fountain-discovery surface must stay gone (O21).
  *
- * PRO ONLY as of O21: the standard plugin no longer has any Fountain
- * discovery machinery (fountain_resolve and friends were removed), so
- * this file drives the Pro class's private fountain_* methods and first
- * pins the standard class's method absence, then asserts:
- *
- *   A. fountain_try_resolve() POSTs to https://fountain.fm/search (NOT the
- *      site root - a root POST gets an empty application/json {} back).
- *   B. Negative-cache TTL policy mirrors #8 (fountain_negative_cache_ttl):
- *        definitive (404 stale hash, 200-with-readable-hits-but-no-guid,
- *        200-with-empty-hits)             -> FAIL_CACHE_TTL  (3600 s)
- *        unconfirmed (transport/5xx/3xx/
- *        unreadable 200 body)             -> SOFT_FAIL_CACHE (30 s)
- *        success                          -> 30-day hit cache
- *   C. extract_fountain_hit() keeps parsing the glued hits marker and
- *      maintains last_fountain_hits_parsed for the TTL decision.
- *   D. fountain_autodetect_next_actions() seeds /search FIRST, scans the
- *      search-only chunk delta before homepage chunks (where the
- *      searchContent registration now lives), returns EVERY near-"search"
- *      candidate in scan order (de-duplicated), rejects untrusted/
- *      cleartext script URLs, falls back to homepage-only when /search is
- *      down, and stays throttled to one run per 15 minutes.
- *   E. fountain_resolve() probes the detected candidates IN ORDER and
- *      persists only the first id that answers with a hits payload (O11):
- *      a dead first candidate must neither be stored nor stop the probe,
- *      a live "no match" id IS stored (and stops it), and an already-good
- *      stored id never triggers a re-crawl.
+ * fountain_resolve and friends were removed from this plugin before
+ * 1.22.x; this harness pins that they never come back - each method name
+ * must be absent from V4V_Music_Link_Resolver. (The Pro plugin's live
+ * implementations are exercised in the sibling repository
+ * ghmattf/v4v-musiclink-pro.)
  */
 
 define( 'ABSPATH', '/tmp/' );
@@ -72,8 +51,7 @@ function add_action() {}
 function add_filter() {}
 function register_activation_hook() {}
 function get_option( $k, $d = false )           {
-	if ( 'v4v_musiclink_cache_table_version' === $k || 'v4v_musiclink_pro_cache_table_version' === $k ) { return '1'; }
-	if ( 'v4v_musiclink_pro_log_table_version' === $k ) { return '2'; }
+	if ( 'v4v_musiclink_cache_table_version' === $k ) { return '1'; }
 	return array_key_exists( $k, $GLOBALS['options'] ) ? $GLOBALS['options'][$k] : $d;
 }
 function update_option( $k, $v, $a = false )    {
@@ -118,37 +96,6 @@ function ok( $cond, $label ) {
 	if ( $cond ) { $pass++; echo "PASS - $label\n"; }
 	else         { $fail++; echo "FAIL - $label\n"; }
 }
-
-function reset_state() {
-	$GLOBALS['transients']     = array();
-	$GLOBALS['transient_ttls'] = array();
-	$GLOBALS['post_log']       = array();
-	$GLOBALS['get_log']        = array();
-	$GLOBALS['post_response']  = null;
-	$GLOBALS['post_router']    = array();
-	$GLOBALS['get_router']     = array();
-	$GLOBALS['options']        = array();
-	$GLOBALS['option_log']     = array();
-}
-
-function method( $class, $name ) {
-	$m = new ReflectionMethod( $class, $name );
-	$m->setAccessible( true );
-	return $m;
-}
-
-$GUID  = 'cbdaeaa0-3c58-41ce-92d1-c718710ade54';
-$NA    = 'abcdef0123456789abcdef0123456789abcdef01';
-$TITLE = 'See Through';
-
-$hits_body = function ( $hits_json ) {
-	return '0:{"a":"$@1","f":"","q":"","i":false,"b":"byL10Gh"} 2:T6d1,<p>some flight text</p>' . $hits_json;
-};
-$HITS_TRACK  = $hits_body( '4:{"hits":[{"_guid":"other-guid","_id":"xyz","_type":"ALBUM"},{"_guid":"'.$GUID.'","_id":"qkMEo45HgMB0uZ5tUlXE","_type":"TRACK"}]}' );
-$HITS_NO_TGT = $hits_body( '4:{"hits":[{"_guid":"other-guid","_id":"xyz","_type":"ALBUM"}]}' );
-$HITS_EMPTY  = $hits_body( '4:{"hits":[]}' );
-$NO_MARKER   = '{}';
-$BAD_JSON    = $hits_body( '4:{"hits":[oops' );
 
 // O21: standard's discovery surface must be gone entirely.
 foreach ( array( 'fountain_resolve', 'fountain_try_resolve', 'fountain_autodetect_next_actions', 'fountain_scan_chunks_for_actions', 'extract_fountain_hit', 'store_fountain_link' ) as $gone ) {

@@ -1,6 +1,6 @@
 <?php
 /**
- * Behavioural test for the current security round:
+ * Behavioural test for the current security round (standard plugin):
  *
  *  #6  og:url (both social-preview modes) and the Share button build from
  *      musiclink_canonical_url() instead of the raw request URI: one URL
@@ -8,17 +8,17 @@
  *      helper returns it UNESCAPED so every consumer (core's
  *      rel_canonical(), this plugin's output sites) escapes exactly once.
  *
- *  #3  Every guid intake point drops input over 256 bytes as if the guid
- *      were absent - Pro query args, both log-beacon POSTs, and both
- *      plugins' shortcode attributes - LENGTH ONLY: no charset
- *      whitelist, so free-form Music Index ids (track_01-they're-right!)
- *      pass through untouched.
+ *  #3  The shortcode-attribute intake drops a guid over 256 bytes as if
+ *      it were absent - LENGTH ONLY: no charset whitelist, so free-form
+ *      Music Index ids (track_01-they're-right!) pass through untouched.
+ *      (The Pro plugin's query-arg and log-beacon intake caps are covered
+ *      in the sibling repository ghmattf/v4v-musiclink-pro.)
  *
  * The esc_url() stub below is entity-aware and idempotent like core's
  * (bare & -> &#038;, existing entities left alone), so output assertions
  * model what a browser really gets.
  *
- * Run:  ./php/php tmp/canonical_guid_test.php
+ * Run:  ./php/php tests/canonical_guid_test.php
  */
 
 error_reporting( E_ALL );
@@ -37,20 +37,12 @@ function add_filter( ...$a ) {}
 function add_options_page( ...$a ) {}
 function register_activation_hook( ...$a ) {}
 function register_setting( ...$a ) {}
-function get_file_data( ...$a ) { return array( 'Version' => '1.20.20' ); }
+function get_file_data( ...$a ) { return array( 'Version' => '1.22.30' ); }
 
 $GLOBALS['__options'] = array(
-	'v4v_musiclink_pro_log_table_version' => '2', // Current schema: no dbDelta run.
 	'v4v_musiclink_cache_table_version' => '1', // Current schema: no dbDelta run.
-	'v4v_musiclink_pro_cache_table_version' => '1', // Current schema: no dbDelta run.
 	// Only formulaic apps enabled: no Fountain self-heal network chatter
 	// during renders.
-	'v4v_musiclink_pro_apps' => array(
-		'stablekraft' => array( 'enabled' => true, 'icon_url' => '' ),
-		'podtunes'    => array( 'enabled' => false, 'icon_url' => '' ),
-		'v4vmusic'    => array( 'enabled' => true, 'icon_url' => '' ),
-		'fountain'    => array( 'enabled' => false, 'icon_url' => '' ),
-	),
 	'v4v_musiclink_apps' => array(
 		'stablekraft' => array( 'enabled' => true, 'icon_url' => '' ),
 		'podtunes'    => array( 'enabled' => false, 'icon_url' => '' ),
@@ -104,7 +96,6 @@ function absint( $v ) { return abs( (int) $v ); }
 function current_time( $type = 'mysql' ) { return '2026-09-25 12:00:00'; }
 function get_date_from_gmt( $ts, $format = 'Y-m-d H:i:s' ) { return $ts; }
 function wp_timezone() { return new DateTimeZone( 'UTC' ); }
-function get_the_title( $post = null ) { return 'See Through by Fentlay'; }
 function get_bloginfo( $show = '' ) { return 'phafe.com'; }
 function get_theme_mod( $k, $d = false ) { return $d; }
 function get_site_icon_url( $size = 512, $post = 0 ) { return ''; }
@@ -142,24 +133,7 @@ function add_query_arg( ...$args ) {
 	return $parts[0] . ( $query ? '?' . http_build_query( $query ) : '' );
 }
 
-class Nonce_Failed extends Exception {}
-$GLOBALS['__ajax_nonce_ok'] = true;
 function check_admin_referer( ...$a ) { return true; }
-function check_ajax_referer( ...$a ) {
-	if ( ! $GLOBALS['__ajax_nonce_ok'] ) { throw new Nonce_Failed( 'ajax nonce' ); }
-	return true;
-}
-
-// wp_send_json_*() terminates the request; model that with an exception.
-class Json_Sent extends Exception {
-	public $payload;
-	public function __construct( $payload ) {
-		$this->payload = $payload;
-		parent::__construct( 'json-sent' );
-	}
-}
-function wp_send_json_success( $data = null ) { throw new Json_Sent( array( 'success' => true, 'data' => $data ) ); }
-function wp_send_json_error( $data = null, $code = null ) { throw new Json_Sent( array( 'success' => false, 'data' => $data, 'code' => $code ) ); }
 
 class WP_Error {}
 function is_wp_error( $t ) { return $t instanceof WP_Error; }
@@ -219,16 +193,10 @@ class Wpdb_Stub {
 }
 $GLOBALS['wpdb'] = new Wpdb_Stub();
 
-class WP_Post {
-	public $post_content = '';
-	public $post_title   = '';
-}
-$GLOBALS['post'] = new WP_Post();
-$GLOBALS['post']->post_content = '[musiclink_pro album="FEED1"]';
 $_SERVER['REMOTE_ADDR'] = '203.0.113.7';
 $_SERVER['REQUEST_URI'] = '/musiclink';
 
-// --- The real plugin files ---
+// --- The real plugin file ---
 require_once dirname( __DIR__ ) . '/v4v-musiclink/v4v-musiclink.php';
 
 // --- Harness helpers ---
@@ -251,36 +219,6 @@ function contains( $label, $haystack, $needle ) {
 function excludes( $label, $haystack, $needle ) {
 	check( $label, false === strpos( (string) $haystack, $needle ), true );
 }
-function call_private( $object, $method, ...$args ) {
-	$ref = new ReflectionMethod( get_class( $object ), $method );
-	return $ref->invokeArgs( $object, $args );
-}
-/** Runs ajax_log_app() and returns the wp_send_json_* payload. */
-function beacon( $post ) {
-	global $pro;
-	$_POST = $post;
-	try {
-		call_private( $pro, 'ajax_log_app' );
-	} catch ( Json_Sent $e ) {
-		return $e->payload;
-	} catch ( Exception $e ) {
-		return array( 'thrown' => get_class( $e ) );
-	}
-	return array( 'thrown' => 'none' );
-}
-/** Runs ajax_log_open() and returns the wp_send_json_* payload. */
-function open_beacon( $post ) {
-	global $pro;
-	$_POST = $post;
-	try {
-		call_private( $pro, 'ajax_log_open' );
-	} catch ( Json_Sent $e ) {
-		return $e->payload;
-	} catch ( Exception $e ) {
-		return array( 'thrown' => get_class( $e ) );
-	}
-	return array( 'thrown' => 'none' );
-}
 function reset_state() {
 	global $wpdb;
 	$wpdb->inserts = array();
@@ -297,8 +235,8 @@ function reset_state() {
 }
 
 /**
- * Seeds one cache row (the O12 storage both plugins read). $mi supplies
- * the MI half; the Fountain half stays empty, so link resolution still
+ * Seeds one cache row (the O12 storage layout). $mi supplies the MI
+ * half; the Fountain half stays empty, so link resolution still
  * exercises its own path. mi_updated_at is stamped well into the future
  * so no render ever queues a background refresh behind these rows.
  */

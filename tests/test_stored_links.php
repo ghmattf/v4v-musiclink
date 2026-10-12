@@ -12,11 +12,11 @@
  * order, the fresh-install path of maybe_create_cache_table(), and the
  * sanitize_mi_refresh_hours matrix.
  *
- * Loads both real plugin files with WordPress stubbed out, including a
- * small in-memory $wpdb that speaks the query shapes the feature issues
- * (SELECT by hash, INSERT ... ON DUPLICATE KEY UPDATE, UPDATE, DELETE,
- * plus wpdb->update()/delete() for the row handlers). dbDelta() comes
- * from tmp/wpstub/, which is why ABSPATH points there.
+ * Loads the real standard plugin file with WordPress stubbed out,
+ * including a small in-memory $wpdb that speaks the query shapes the
+ * feature issues (SELECT by hash, INSERT ... ON DUPLICATE KEY UPDATE,
+ * UPDATE, DELETE, plus wpdb->update()/delete() for the row handlers).
+ * dbDelta() comes from tests/wpstub/, which is why ABSPATH points there.
  */
 
 define( 'ABSPATH', __DIR__ . '/wpstub/' );
@@ -31,12 +31,10 @@ ini_set( 'display_errors', '1' );
 class Fake_WP_Error { public $msg = 'stubbed transport failure'; }
 
 $GLOBALS['__options'] = array(
-	// Both cache schemas "already installed": the constructors then never
-	// reach dbDelta()/upgrade.php. Reset to '1' before every test, so the
+	// The cache schema is "already installed": the constructor then never
+	// reaches dbDelta()/upgrade.php. Reset to '1' before every test, so the
 	// M0 fresh-install test can't leak into the next one.
-	'v4v_musiclink_cache_table_version'     => '1',
-	'v4v_musiclink_pro_cache_table_version' => '1',
-	'v4v_musiclink_pro_log_table_version'   => '2',
+	'v4v_musiclink_cache_table_version' => '1',
 );
 $GLOBALS['__deleted_options'] = array();
 $GLOBALS['transients']        = array();
@@ -377,8 +375,7 @@ function reset_state() {
 	$wpdb->data    = array();
 	$wpdb->queries = array();
 	$wpdb->columns = array(
-		'wp_v4v_musiclink_cache'       => CACHE_COLS,
-		'wp_v4v_musiclink_pro_cache'   => CACHE_COLS,
+		'wp_v4v_musiclink_cache' => CACHE_COLS,
 	);
 	$GLOBALS['transients']        = array();
 	$GLOBALS['transients_ttl']    = array();
@@ -392,15 +389,10 @@ function reset_state() {
 	$GLOBALS['__dbdelta']         = array();
 	$GLOBALS['__hooks']           = array();
 	$GLOBALS['__deleted_options'] = array();
-	$GLOBALS['__options']['v4v_musiclink_cache_table_version']     = '1';
-	$GLOBALS['__options']['v4v_musiclink_pro_cache_table_version'] = '1';
-	$GLOBALS['__options']['v4v_musiclink_pro_log_table_version']   = '2';
+	$GLOBALS['__options']['v4v_musiclink_cache_table_version'] = '1';
 	unset( $GLOBALS['__options']['v4v_musiclink_fountain_next_action'] );
-	unset( $GLOBALS['__options']['v4v_musiclink_pro_fountain_next_action'] );
 	unset( $GLOBALS['__options']['v4v_musiclink_mi_refresh_hours'] );
-	unset( $GLOBALS['__options']['v4v_musiclink_pro_mi_refresh_hours'] );
 	unset( $GLOBALS['__options']['v4v_musiclink_random_app_order'] );
-	unset( $GLOBALS['__options']['v4v_musiclink_pro_random_app_order'] );
 	$_GET  = array();
 	$_POST = array();
 }
@@ -487,12 +479,9 @@ $classes = array(
 		'random_opt'  => 'v4v_musiclink_random_app_order',
 		'apps_opt'    => 'v4v_musiclink_apps',
 		'track_key'   => 'mi_track_v4_',
-		'feed_key'    => 'mi_feed_v4_',
-		'hit_key'     => 'fountain_id_v5_',
-		'next_opt'    => 'v4v_musiclink_fountain_next_action',
 		'mi_opt'      => 'v4v_musiclink_mi_refresh_hours',
 		'attempt'     => 'v4v_musiclink_mi_attempt_',
-		'action'     => 'v4v_musiclink',
+		'action'      => 'v4v_musiclink',
 		'nonces'      => array(
 			'clear'  => 'v4v_musiclink_clear_cache',
 			'update' => 'v4v_musiclink_update_cache_row',
@@ -519,14 +508,12 @@ foreach ( $classes as $class => $cfg ) {
 	$track2   = 'bbbbbbbb-5555-6666-7777-888888888888';
 	$hash2    = sha1( $album2 . '|' . $track2 );
 	$deep     = 'https://fountain.fm/episode/SEETHROUGH123';
-	$hit      = array( 'id' => 'SEETHROUGH123', 'type' => 'EPISODE' );
 	$kept     = 'https://fountain.fm/episode/KEEP';
 	$FUTURE   = '2099-01-01 00:00:00'; // inside any refresh window
 	$PAST     = '2020-01-01 00:00:00'; // outside every refresh window
-	// O21: only Pro still resolves Fountain links; standard renders the
+	// O21: this plugin never resolves Fountain links - it renders the
 	// O15 search fallback and never writes the link half.
-	$can_resolve = 'V4V_Music_Link_Resolver_Pro' === $class;
-	$search_fb   = 'https://fountain.fm/search?q=' . urlencode( '"See Through"' );
+	$search_fb = 'https://fountain.fm/search?q=' . urlencode( '"See Through"' );
 
 	/** A cache row with Music Index data (fresh by default) and an optional link. */
 	$seed = function ( $h, $a, $t, $extra = array() ) use ( $table, $FUTURE ) {
@@ -539,13 +526,6 @@ foreach ( $classes as $class => $cfg ) {
 			'fountain_updated_at' => '2026-01-01 00:00:00',
 		), $extra );
 		return $wpdb->seed( $table, $row );
-	};
-
-	// A successful Fountain resolution already cached for the configured
-	// next-action value - so the search path can run with zero HTTP.
-	$warm_resolve = function () use ( $cfg, $track, $hit ) {
-		$GLOBALS['transients'][ $cfg['hit_key'] . md5( $track . '|TESTHASH123' ) ] = $hit;
-		$GLOBALS['__options'][ $cfg['next_opt'] ] = 'TESTHASH123';
 	};
 
 	// === Link half =====================================================
@@ -564,44 +544,30 @@ foreach ( $classes as $class => $cfg ) {
 	$row = $wpdb->row_by_hash( $table, $hash );
 	check( "[$class] S1 row untouched", $row && 'https://fountain.fm/episode/STOREDSEED1' === $row['fountain_url'] && '2026-01-01 00:00:00' === $row['fountain_updated_at'] );
 
-	// --- S2: blank link. Pro re-searches and upserts the LINK half only;
-	//     standard (O21) never resolves - it renders the O15 search
-	//     fallback and writes nothing.
+	// --- S2: blank link. This plugin never resolves - it renders the
+	//     O15 search fallback and writes nothing (O21).
 	reset_state();
 	$seed( $hash, $album, $track );
-	if ( $can_resolve ) { $warm_resolve(); }
 	$obj = fresh_obj( $class );
 	$html = $obj->render( array( 'album' => $album, 'track' => $track ) );
 	check( "[$class] S2 no Fountain HTTP needed", array() === fountain_calls(), json_encode( fountain_calls() ) );
 	check( "[$class] S2 no Music Index HTTP needed (row was fresh)", array() === mi_calls(), json_encode( mi_calls() ) );
 	$row = $wpdb->row_by_hash( $table, $hash );
 	check( "[$class] S2 still exactly one row", 1 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
-	if ( $can_resolve ) {
-		check( "[$class] S2 resolved deep link is rendered", false !== strpos( $html, $deep ), $deep );
-		check( "[$class] S2 upsert (ON DUPLICATE KEY UPDATE) recorded", has_sql( 'ON DUPLICATE KEY UPDATE' ) );
-	} else {
-		check( "[$class] S2 search fallback rendered", false !== strpos( $html, 'href="' . $search_fb . '"' ), 'expected ' . $search_fb );
-		check( "[$class] S2 no deep link rendered", false === strpos( $html, $deep ) );
-		check( "[$class] S2 no upsert recorded", ! has_sql( 'ON DUPLICATE KEY UPDATE' ), 'unexpected link upsert' );
-	}
+	check( "[$class] S2 search fallback rendered", false !== strpos( $html, 'href="' . $search_fb . '"' ), 'expected ' . $search_fb );
+	check( "[$class] S2 no deep link rendered", false === strpos( $html, $deep ) );
+	check( "[$class] S2 no upsert recorded", ! has_sql( 'ON DUPLICATE KEY UPDATE' ), 'unexpected link upsert' );
 	if ( is_array( $row ) ) {
-		check( "[$class] S2 row link", $can_resolve ? ( $deep === $row['fountain_url'] ) : ( '' === $row['fountain_url'] ), var_export( $row['fountain_url'], true ) );
-		check( "[$class] S2 fountain_updated_at", $can_resolve ? ( '2026-09-26 12:00:00' === $row['fountain_updated_at'] ) : ( '2026-01-01 00:00:00' === $row['fountain_updated_at'] ), $row['fountain_updated_at'] );
+		check( "[$class] S2 row link", '' === $row['fountain_url'], var_export( $row['fountain_url'], true ) );
+		check( "[$class] S2 fountain_updated_at", '2026-01-01 00:00:00' === $row['fountain_updated_at'], $row['fountain_updated_at'] );
 		check( "[$class] S2 Music Index half untouched", 'http://x/y.jpg' === $row['image_url'] && 'See Through' === $row['track_title'] && $FUTURE === $row['mi_updated_at'], json_encode( $row ) );
 		check( "[$class] S2 row guids", $album === $row['album_guid'] && $track === $row['track_guid'] );
 	}
 	$link_upserts = array_values( array_filter( sqls( 'ON DUPLICATE KEY UPDATE' ), function ( $q ) {
 		return false !== stripos( $q, 'fountain_url = VALUES(fountain_url)' );
 	} ) );
-	check( "[$class] S2 link upserts", $can_resolve ? ( 1 === count( $link_upserts ) ) : ( 0 === count( $link_upserts ) ), count( $link_upserts ) . ' found' );
-	if ( $can_resolve ) {
-		check( "[$class] S2 link upsert touches only the link half", 1 === count( $link_upserts )
-			&& false === stripos( $link_upserts[0], 'mi_updated_at' )
-			&& false !== stripos( $link_upserts[0], 'fountain_updated_at' ), implode( ' | ', $link_upserts ) );
-		check( "[$class] S2 lookup now returns the cached link", $deep === call_private( $obj, 'get_cached_fountain_url', array( $album, $track ) ) );
-	} else {
-		check( "[$class] S2 lookup still returns nothing", '' === call_private( $obj, 'get_cached_fountain_url', array( $album, $track ) ) );
-	}
+	check( "[$class] S2 link upserts", 0 === count( $link_upserts ), count( $link_upserts ) . ' found' );
+	check( "[$class] S2 lookup still returns nothing", '' === call_private( $obj, 'get_cached_fountain_url', array( $album, $track ) ) );
 
 	// --- S3: on Fountain failure the button lands on a Fountain search
 	//     for the release (never the generic discover page) - and the
@@ -618,34 +584,22 @@ foreach ( $classes as $class => $cfg ) {
 	// which is attached via wp_add_inline_script and so is not part of
 	// render()'s return - tmp/e2e/gen_page.php gates that instead.
 
-	// --- S4: Pro re-runs the search for a blanked link and fills it in
-	//     (no duplicate row, MI half untouched); standard renders the
-	//     fallback and never writes (O21)
+	// --- S4: a blanked link stays blank - this plugin re-runs the search
+	//     never (O21); it renders the fallback and never writes
 	reset_state();
 	$seed( $hash, $album, $track, array( 'fountain_url' => '' ) );
-	if ( $can_resolve ) { $warm_resolve(); }
 	$obj = fresh_obj( $class );
 	$html = $obj->render( array( 'album' => $album, 'track' => $track ) );
-	if ( $can_resolve ) {
-		check( "[$class] S4 blank link re-runs the search", false !== strpos( $html, $deep ), $deep );
-	} else {
-		check( "[$class] S4 blank link renders the search fallback", false !== strpos( $html, 'href="' . $search_fb . '"' ), 'expected ' . $search_fb );
-	}
+	check( "[$class] S4 blank link renders the search fallback", false !== strpos( $html, 'href="' . $search_fb . '"' ), 'expected ' . $search_fb );
 	$row = $wpdb->row_by_hash( $table, $hash );
 	check( "[$class] S4 still exactly one row", 1 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
-	if ( $can_resolve ) {
-		check( "[$class] S4 blank link filled in", $row && $deep === $row['fountain_url'], var_export( $row ? $row['fountain_url'] : null, true ) );
-	} else {
-		check( "[$class] S4 blank link stays blank", $row && '' === $row['fountain_url'], var_export( $row ? $row['fountain_url'] : null, true ) );
-	}
+	check( "[$class] S4 blank link stays blank", $row && '' === $row['fountain_url'], var_export( $row ? $row['fountain_url'] : null, true ) );
 	check( "[$class] S4 Music Index half untouched", $row && 'http://x/y.jpg' === $row['image_url'] && $FUTURE === $row['mi_updated_at'] );
 
-	// --- S5: an edited link is never reverted by a later render, even
-	//     though a search would succeed
+	// --- S5: an edited link is never reverted by a later render
 	reset_state();
 	$manual = 'https://fountain.fm/custom/HandFixed';
 	$seed( $hash, $album, $track, array( 'fountain_url' => $manual ) );
-	$warm_resolve();
 	$obj = fresh_obj( $class );
 	$html = $obj->render( array( 'album' => $album, 'track' => $track ) );
 	check( "[$class] S5 edited link is what the button points at", false !== strpos( $html, $manual ), $manual );
@@ -661,15 +615,10 @@ foreach ( $classes as $class => $cfg ) {
 	$html = $obj->render( array( 'album' => $album ) );
 	check( "[$class] S6 album-only render uses the album row", false !== strpos( $html, 'https://fountain.fm/album/ALBUMSEED1' ) );
 	check( "[$class] S6 album-only render writes nothing", ! has_sql( 'INSERT INTO' ) );
-	if ( $can_resolve ) { $warm_resolve(); }
 	$seed( $hash, $album, $track );
 	$obj = fresh_obj( $class );
 	$html = $obj->render( array( 'album' => $album, 'track' => $track ) );
-	if ( $can_resolve ) {
-		check( "[$class] S6 track render does not reuse the album link", false === strpos( $html, 'ALBUMSEED1' ) && false !== strpos( $html, $deep ) );
-	} else {
-		check( "[$class] S6 track render does not reuse the album link", false === strpos( $html, 'ALBUMSEED1' ) && false !== strpos( $html, 'href="' . $search_fb . '"' ) );
-	}
+	check( "[$class] S6 track render does not reuse the album link", false === strpos( $html, 'ALBUMSEED1' ) && false !== strpos( $html, 'href="' . $search_fb . '"' ) );
 	check( "[$class] S6 two distinct rows now", 2 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
 	$track_row = $wpdb->row_by_hash( $table, $hash );
 	check( "[$class] S6 track row carries track_guid", $track_row && $track === $track_row['track_guid'] );
@@ -868,24 +817,15 @@ foreach ( $classes as $class => $cfg ) {
 	check( "[$class] H1 guids/titles/artist survive", $row && $album === $row['album_guid'] && $track === $row['track_guid'] && 'The Singles' === $row['album_title'] && 'See Through' === $row['track_title'] && 'Fentlay' === $row['artist'], json_encode( $row ) );
 	check( "[$class] H1 clear stamps fountain_updated_at", $row && '2026-09-26 12:00:00' === $row['fountain_updated_at'], $row ? $row['fountain_updated_at'] : '' );
 
-	// Only the release actually viewed re-resolves (Pro); standard (O21)
-	// never re-resolves - it renders the fallback and the row stays
-	// blank. The other release stays blank either way.
-	if ( $can_resolve ) { $warm_resolve(); }
+	// Only the release actually viewed would re-resolve (Pro); this
+	// plugin never re-resolves (O21) - it renders the fallback and the
+	// row stays blank. The other release stays blank either way.
 	$obj = fresh_obj( $class );
 	$html = $obj->render( array( 'album' => $album, 'track' => $track ) );
-	if ( $can_resolve ) {
-		check( "[$class] H1 cleared link comes back, same row", false !== strpos( $html, $deep ) && 2 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
-	} else {
-		check( "[$class] H1 cleared link renders the fallback, same 2 rows", false !== strpos( $html, 'href="' . $search_fb . '"' ) && 2 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
-	}
+	check( "[$class] H1 cleared link renders the fallback, same 2 rows", false !== strpos( $html, 'href="' . $search_fb . '"' ) && 2 === count( $wpdb->rows_in( $table ) ), count( $wpdb->rows_in( $table ) ) . ' rows' );
 	$row = $wpdb->row_by_hash( $table, $hash );
 	$two = $wpdb->row_by_hash( $table, $hash2 );
-	if ( $can_resolve ) {
-		check( "[$class] H1 row data intact after the re-resolve", $row && $deep === $row['fountain_url'] && 'The Singles' === $row['album_title'] && 'Fentlay' === $row['artist'], json_encode( $row ) );
-	} else {
-		check( "[$class] H1 row stays blank after the render", $row && '' === $row['fountain_url'] && 'The Singles' === $row['album_title'] && 'Fentlay' === $row['artist'], json_encode( $row ) );
-	}
+	check( "[$class] H1 row stays blank after the render", $row && '' === $row['fountain_url'] && 'The Singles' === $row['album_title'] && 'Fentlay' === $row['artist'], json_encode( $row ) );
 	check( "[$class] H1 an unviewed release stays blank", $two && '' === $two['fountain_url'] );
 
 	// --- H2: clear all removes the rows themselves

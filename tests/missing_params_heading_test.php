@@ -36,8 +36,7 @@ function add_action() {}
 function add_filter() {}
 function register_activation_hook() {}
 function get_option( $k, $d = false )               {
-	if ( 'v4v_musiclink_cache_table_version' === $k || 'v4v_musiclink_pro_cache_table_version' === $k ) { return '1'; }
-	if ( 'v4v_musiclink_pro_log_table_version' === $k ) { return '2'; }
+	if ( 'v4v_musiclink_cache_table_version' === $k ) { return '1'; }
 	return $d;
 }
 function update_option( $k, $v, $a = false )        { return true; }

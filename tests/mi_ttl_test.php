@@ -4,7 +4,7 @@
  * positive path: successes are written to the cache row (with a
  * mi_updated_at stamp) instead of a positive transient.
  *
- * Loads both real plugin files with WordPress stubbed out, then drives the
+ * Loads the real standard plugin file with WordPress stubbed out, then drives the
  * private mi_get_track()/mi_get_feed() methods through every failure shape
  * and asserts how long each miss is remembered:
  *
@@ -46,8 +46,7 @@ function get_option( $k, $d = false )               {
 	if ( isset( $GLOBALS['__options'][ $k ] ) ) { return $GLOBALS['__options'][ $k ]; }
 	// Pretend the schemas are already installed, so a constructor would
 	// never reach dbDelta()/upgrade.php in this stub.
-	if ( 'v4v_musiclink_cache_table_version' === $k || 'v4v_musiclink_pro_cache_table_version' === $k ) { return '1'; }
-	if ( 'v4v_musiclink_pro_log_table_version' === $k ) { return '2'; }
+	if ( 'v4v_musiclink_cache_table_version' === $k ) { return '1'; }
 	return $d;
 }
 function update_option( $k, $v, $a = false )        { return true; }

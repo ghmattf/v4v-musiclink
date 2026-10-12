@@ -1,12 +1,12 @@
 <?php
 /**
- * Standalone verification for the Fountain path-prefix fix.
+ * The standard plugin's Fountain path helpers must stay gone (O21).
  *
- * PRO ONLY as of O21: drives the Pro class's actual private methods via
- * reflection using captured LIVE fountain.fm search responses
- * (tests/fx_*.txt); the standard plugin's copies of fountain_path_segment()
- * and extract_fountain_hit() were removed with the rest of its discovery
- * machinery, so their absence is pinned up front.
+ * fountain_path_segment() and extract_fountain_hit() were removed with
+ * the rest of this plugin's discovery machinery before 1.22.x; this
+ * harness pins that they never come back. (The Pro plugin's live
+ * implementations are exercised in the sibling repository
+ * ghmattf/v4v-musiclink-pro.)
  *
  * Run:  ./php/install.sh && ./php/php tests/test_fountain_path.php
  *       (no system PHP needed - the portable CLI lives in php/, see
@@ -19,8 +19,8 @@ error_reporting( E_ALL );
 define( 'HOUR_IN_SECONDS', 3600 );
 define( 'MINUTE_IN_SECONDS', 60 );
 define( 'DAY_IN_SECONDS', 86400 );
-// Pro's file guards on this; never exercised because the stubs below short-
-// circuit the constructor's work (log table + social-preview hooks).
+// The plugin file guards on this; never exercised because the stubs below
+// short-circuit the constructor's work (cache-table check + hooks).
 define( 'ABSPATH', __DIR__ . '/' );
 
 // --- WordPress stubs: only what the constructors need ---
@@ -29,22 +29,13 @@ function add_action( ...$a ) {}
 function add_filter( ...$a ) {}
 function register_activation_hook( ...$a ) {}
 function get_option( $k, $d = false ) {
-	// Short-circuit Pro's constructor away from DB writes / wp_head hooks.
-	if ( 'v4v_musiclink_cache_table_version' === $k || 'v4v_musiclink_pro_cache_table_version' === $k ) { return '1'; }
-	if ( 'v4v_musiclink_pro_log_table_version' === $k ) {
-		return '2';
-	}
-	if ( 'v4v_musiclink_pro_social_preview_mode' === $k ) {
-		return 'off';
-	}
+	if ( 'v4v_musiclink_cache_table_version' === $k ) { return '1'; }
 	return $d;
 }
 function update_option( ...$a ) { return true; }
 function get_transient( ...$a ) { return false; }
 function set_transient( ...$a ) { return true; }
 function delete_transient( ...$a ) { return true; }
-
-$GLOBALS['__fixtures'] = __DIR__;
 
 require_once dirname( __DIR__ ) . '/v4v-musiclink/v4v-musiclink.php';
 
@@ -60,21 +51,6 @@ function check( $label, $actual, $expected ) {
 		printf( "  FAIL  %-62s\n         expected: %s\n         actual:   %s\n",
 			$label, var_export( $expected, true ), var_export( $actual, true ) );
 	}
-}
-
-function call_private( $class, $method, ...$args ) {
-	$inst = new $class();
-	$m    = new ReflectionMethod( $class, $method );
-	return $m->invoke( $inst, ...$args );
-}
-
-/**
- * Reproduces the plugin's exact URL construction at the call site:
- *   'https://fountain.fm/' . segment . '/' . rawurlencode( id )
- */
-function build_url( $class, $hit, $has_track ) {
-	$seg = call_private( $class, 'fountain_path_segment', $hit, $has_track );
-	return 'https://fountain.fm/' . $seg . '/' . rawurlencode( $hit['id'] );
 }
 
 // O21: standard's discovery surface must be gone entirely.

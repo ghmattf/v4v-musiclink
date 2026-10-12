@@ -14,7 +14,7 @@
  * itself has no offline test (no JS runtime in the toolchain); its
  * enqueue is pinned here instead.
  *
- * Run: ./php/php tmp/test_block_rest.php
+ * Run: ./php/php tests/test_block_rest.php
  */
 
 define( 'ABSPATH', __DIR__ . '/wpstub/' );
@@ -58,9 +58,7 @@ class Fake_WP_Error { public $msg = 'stubbed transport failure'; }
 
 // --- globals the stubs read ----------------------------------------------
 $GLOBALS['__options'] = array(
-	'v4v_musiclink_cache_table_version'     => '1',
-	'v4v_musiclink_pro_cache_table_version' => '1',
-	'v4v_musiclink_pro_log_table_version'   => '2',
+	'v4v_musiclink_cache_table_version' => '1',
 );
 $GLOBALS['transients']        = array();
 $GLOBALS['http_calls']        = array();
