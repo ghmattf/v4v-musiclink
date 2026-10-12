@@ -176,7 +176,7 @@ README usage sections for both versions gain the attribute.
 ## O26. WordPress.org Plugin Directory submission readiness - standard plugin
 
 **Status: Open** (identified 2026-10-11 after the user said they plan to
-submit `v4v-musiclink/` to the WordPress Plugin Directory; awaiting triage -
+submit `wp_plugin/` to the WordPress Plugin Directory; awaiting triage -
 implement only on request).
 
 **What:** compliance audit of standard 1.22.30 against the wp.org plugin
@@ -198,7 +198,7 @@ gates). The gaps are packaging, one guideline violation, and docs.
    description, plus Description/Installation/FAQ/Screenshots/Changelog
    sections. Root README.md is a solid base to adapt.
 2. **No GPL declaration** - plugin header (:1-79) has no `License:` /
-   `License URI:` and no LICENSE file ships in `v4v-musiclink/`.
+   `License URI:` and no LICENSE file ships in `wp_plugin/`.
    Guideline 1; a known rejection reason ("No GPL-compatible license
    declared"). Declare `GPLv2 or later`.
 3. **Guideline 10 violation - unconditional credit links on public
@@ -219,8 +219,8 @@ gates). The gaps are packaging, one guideline violation, and docs.
 - Pick the directory slug = `v4v-musiclink` (fixed at first submission;
   it must equal the text domain or all 152 refs need rewriting).
 - Build the zip by hand (bump-version.sh makes git commits, not zips):
-  include `v4v-musiclink/v4v-musiclink.php` + new readme.txt, **exclude
-  `v4v-musiclink/archive/`** (gitignored historical backups - wp.org
+  include `wp_plugin/v4v-musiclink.php` + new readme.txt, **exclude
+  `wp_plugin/archive/`** (gitignored historical backups - wp.org
   flags "Included Unneeded Folders") and any `.git`.
 - Run the official **Plugin Check** plugin + the readme validator before
   submitting (the two automated gates); 14-business-day review, then SVN

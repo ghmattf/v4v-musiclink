@@ -6,7 +6,7 @@
 
 ```bash
 ./php/php -v                                # check it works
-./php/php -l v4v-musiclink/v4v-musiclink.php
+./php/php -l wp_plugin/v4v-musiclink.php
 ./php/install.sh                            # install or repair it (idempotent)
 ```
 
@@ -37,7 +37,7 @@ This project is tracked with git and hosted at [github.com/ghmattf/v4v-musiclink
 - The version appears in **two places** in the plugin file — keep both in sync:
   1. The plugin header: ` * Version: X.Y.Z`
   2. The script cache-buster: `wp_register_script( …, 'X.Y.Z', true );`
-- Plugin: V4V Music Link Resolver — `v4v-musiclink/v4v-musiclink.php`. The Pro plugin is versioned independently in the sibling repository `ghmattf/v4v-musiclink-pro`.
+- Plugin: V4V Music Link Resolver — `wp_plugin/v4v-musiclink.php`. The Pro plugin is versioned independently in the sibling repository `ghmattf/v4v-musiclink-pro`.
 
 ### Automated: `./bump-version.sh`
 
@@ -49,11 +49,11 @@ The script increments the patch version in both places, refreshes the archive co
 
 ## Archive copies
 
-Once a PHP file has been updated, a copy must be placed in the plugin's `archive/` subdirectory, with the version number appended to the filename. Example: version 1.22.1 of `v4v-musiclink.php` must have a copy named `v4v-musiclink-v1.22.1.php` created in the `v4v-musiclink/archive/` subdirectory. `bump-version.sh` creates these copies automatically.
+Once a PHP file has been updated, a copy must be placed in the plugin's `archive/` subdirectory, with the version number appended to the filename. Example: version 1.22.1 of `v4v-musiclink.php` must have a copy named `v4v-musiclink-v1.22.1.php` created in the `wp_plugin/archive/` subdirectory. `bump-version.sh` creates these copies automatically.
 
 > **Note:** git tags are the authoritative record of any past release; the `archive/` copies are kept as a plain-file backup per the original build instructions. They are **out of scope for review** — exclude `archive/` from linting, searches, audits, and reports (agents: see `AGENTS.md`, which OpenCode enforces via `opencode.jsonc`). Retrieve any past version with:
 > ```bash
-> git show v1.22.1:v4v-musiclink/v4v-musiclink.php
+> git show v1.22.1:wp_plugin/v4v-musiclink.php
 > ```
 
 ## Release checklist
@@ -63,7 +63,7 @@ Once a PHP file has been updated, a copy must be placed in the plugin's `archive
 
    ```bash
    ./php/install.sh   # only if ./php/php is missing
-   ./php/php -l v4v-musiclink/v4v-musiclink.php
+   ./php/php -l wp_plugin/v4v-musiclink.php
    ```
 3. Run the regression harnesses — see [Regression tests](#regression-tests) (all `tests/test_*.php` / `tests/*_test.php` files must report `0 failed`).
 4. Bump the version: `./bump-version.sh` — this commits the bumped plugin file itself, subject `Bump Resolver x.y.z`.

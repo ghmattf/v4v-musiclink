@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-file="v4v-musiclink/v4v-musiclink.php"
+file="wp_plugin/v4v-musiclink.php"
 
 [ -f "$file" ] || { echo "ERROR: $file not found" >&2; exit 1; }
 
@@ -32,9 +32,9 @@ if ! grep -q "Version: $new" "$file" || ! grep -q "array(), '$new'" "$file"; the
 fi
 
 # Refresh the archive copy (gitignored backup history).
-mkdir -p v4v-musiclink/archive
-cp "$file" "v4v-musiclink/archive/v4v-musiclink-v${new}.php"
-echo "Bumped $file: $cur -> $new (v4v-musiclink/archive/v4v-musiclink-v${new}.php)"
+mkdir -p wp_plugin/archive
+cp "$file" "wp_plugin/archive/v4v-musiclink-v${new}.php"
+echo "Bumped $file: $cur -> $new (wp_plugin/archive/v4v-musiclink-v${new}.php)"
 
 # --- Commit just the plugin file that was bumped ---------------------------
 # Only this path is committed: anything else sitting in the index (or an

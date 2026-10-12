@@ -25,4 +25,4 @@ wp-content/*-debug.log
 tmp/
 
 # Version-history backups written by bump-version.sh - never project files
-v4v-musiclink/archive/
+wp_plugin/archive/

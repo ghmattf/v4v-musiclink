@@ -4,7 +4,7 @@
 
 The project consists of:
 
-- `v4v-musiclink/v4v-musiclink.php` — the standard WordPress plugin (current release)
+- `wp_plugin/v4v-musiclink.php` — the standard WordPress plugin (current release)
 - `tests/` — tracked regression suite (`test_*.php` / `*_test.php` harnesses,
   `wpstub/`)
 - `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `OUTSTANDING.md`
@@ -20,7 +20,7 @@ naming anything new.
 
 ## Out of scope: `archive/` directories
 
-The `v4v-musiclink/archive/` directory holds historical backup copies
+The `wp_plugin/archive/` directory holds historical backup copies
 written automatically by `bump-version.sh`. It exists for backup/history only
 and is **not** part of the project.
 
@@ -68,12 +68,12 @@ for this project. Maintain it as follows:
 
 Applies to code releases only (never for docs-only changes):
 
-1. Lint the plugin file: `./php/php -l v4v-musiclink/v4v-musiclink.php` (use the
+1. Lint the plugin file: `./php/php -l wp_plugin/v4v-musiclink.php` (use the
    project PHP from `php/install.sh`; no system PHP).
 2. Run the regression harnesses: `./php/php tests/<harness>.php` for each
    `tests/test_*.php` / `tests/*_test.php` (8 files).
 3. `./bump-version.sh` — bumps the plugin header and the script cache-buster,
-   refreshes the backup copies under `v4v-musiclink/archive/` (gitignored,
+   refreshes the backup copies under `wp_plugin/archive/` (gitignored,
    never committed), and **commits the bumped plugin file itself** — only that
    path, with subject `Bump Resolver x.y.z`.
 4. Add a `CHANGELOG.md` entry at the top, Keep-a-Changelog style, dated today:

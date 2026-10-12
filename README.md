@@ -6,7 +6,7 @@ This is the **standard** version of the WordPress plugin. The Pro version lives 
 
 ## Features
 
-`v4v-musiclink/`
+`wp_plugin/`
 
 - Accepts `album` and (optionally) `track` GUID parameters within the shortcode, plus an optional `header="true|false"` attribute that shows or hides the release header for that one placement.
 - Queries musicindex.org for album, track, artist, and art information and displays it on a page, with a button for each music player that takes the user directly to the album/track within that player.
@@ -61,7 +61,7 @@ Linting and testing use a **portable PHP CLI kept in `php/`** — there is no sy
 
 ```bash
 ./php/install.sh   # first run / after a fresh clone (binary is gitignored)
-./php/php -l v4v-musiclink/v4v-musiclink.php
+./php/php -l wp_plugin/v4v-musiclink.php
 ```
 
 Run the whole regression suite with `for f in tests/test_*.php tests/*_test.php; do ./php/php "$f"; done` — see the [Regression tests section of CONTRIBUTING.md](CONTRIBUTING.md#regression-tests).
