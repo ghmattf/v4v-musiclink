@@ -11,9 +11,9 @@ Thumbs.db
 node_modules/
 vendor/
 
-# Portable PHP CLI - downloaded artifacts (recreate with php/install.sh)
-php/php
-php/*.tar.gz
+# Local dev tooling - never published to GitHub
+php/
+tests/
 
 # Local env / secrets
 .env
