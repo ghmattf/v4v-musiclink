@@ -1,10 +1,10 @@
-# V4V MusicLink
+# V4V MusicLink (standard)
 
 An alternative to pod.link for music indexed by musicindex.org, providing direct links to the artist/album/song for Podcasting 2.0 music player apps such as fountain.fm, v4vmusic.com, stablekraft.app and podtunes.app.
 
-The tool is a WordPress plugin provided in two versions. Both versions can run on the same WordPress instance without conflict.
+This is the **standard** version of the WordPress plugin. The Pro version lives in the sibling repository [`ghmattf/v4v-musiclink-pro`](https://github.com/ghmattf/v4v-musiclink-pro); the two plugins can run on the same WordPress instance without conflict.
 
-## V4V Music Link Resolver (standard)
+## Features
 
 `v4v-musiclink/`
 
@@ -22,7 +22,7 @@ Usage:
 
 A bare `[musiclink]` (or one with unexpected attributes) shows a usage message instead of guessing at intent. `header="true"` / `header="false"` overrides the site-wide "Release header" setting for that instance. There is no URL-parameter or front-end search UI mode in this version.
 
-### Block editor (standard only)
+### Block editor
 
 For Gutenberg posts and pages, insert the **Music Link** block (administrators only). Its settings pane holds everything the shortcode accepts:
 
@@ -36,37 +36,20 @@ Once a release is selected, the block canvas shows it **exactly as the public pa
 
 The block stores the assembled `[musiclink ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search, the preview, and the link field are editor-only, behind `manage_options`.
 
-## V4V Music Link Resolver Pro
-
-`v4v-musiclink-pro/`
-
-The same functionality as the standard version, plus:
-
-- Can accept the album/track GUIDs in the URL string if no parameters were added to the shortcode:
-  ```
-  https://example.com/musiclink?album={album-guid}&track={track-guid}
-  ```
-- If no parameters are provided in either the shortcode or the URL, a search page is displayed where the user can search musicindex.org and select the album/track to display the regular page.
-- Usage of this plugin version is logged: one row when a visitor picks a result on the search page (the click that generates the shareable URL), plus one row per app-button launch (same date/artist/album/track plus the app that opened). Page renders - URL-driven or hardcoded into a shortcode attribute, shared links included - are never logged, and the raw `album`/`track` guids are never stored, only the titles Music Index returns. Both log beacons are rate-limited per client IP (30/minute per endpoint by default, configurable in the settings), and the log keeps only its newest rows (100,000 by default, also configurable).
-- The admin settings page adds a tab to display the logs (with a **Clear log** button), another for running reports - totals by artist/album/track (opens) or by music app (launches), with date-range and artist filters - and a **Cache** tab that lists the cached release rows (with their date-only Music Index and Fountain.fm timestamps, and a tick/cross art status per row) and lets you edit a row's artwork URL or Fountain.fm link, launch the link, delete rows, or clear the Fountain links.
-- Extras: optional Open Graph / Twitter Card social previews, a share button, and canonical URL fixes for guid'd URLs.
-
-Shortcode: `[musiclink_pro]` (accepts the same `album`/`track`/`header` attributes as the standard version).
-
 ## Target apps
 
 | App | Link style |
 |---|---|
 | StableKraft.app | Formulaic GUID-based URL, no lookup required |
 | PodTunes.app | Formulaic GUID-based URL, no lookup required |
-| v4vmusic.com | Search by title (resolved from Music Index) — no public album/track pages exist |
-| Fountain.fm | **Pro:** resolved via their unofficial Server Action endpoint, with automatic self-healing of the `next-action` fingerprint. **Standard:** performs no Fountain discovery - the button uses a link stored on the cache row (set on the Cache tab) when one exists. Either way, when no link exists the button lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known |
+| v4vmusic.com | Formulaic GUID-based URL (`/lookup/{album}` or `/lookup/{album}/{track}`) |
+| Fountain.fm | Performs no Fountain discovery - the button uses a link stored on the cache row (set on the Cache tab) when one exists; otherwise it lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known. (Fountain resolution and self-healing are Pro features.) |
 
-Under **Settings → V4V MusicLink** (standard) / **Settings → V4V MusicLink Pro** (Pro) each app can be individually disabled, given a custom icon URL, given an **icon background colour** (or left transparent via "None" — useful for transparent PNGs; the colour sits behind the 40px icon on the front end and the table preview updates live), and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
+Under **Settings → V4V MusicLink** each app can be individually disabled, given a custom icon URL, given an **icon background colour** (or left transparent via "None" — useful for transparent PNGs; the colour sits behind the 40px icon on the front end and the table preview updates live), and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
 
 ## Data source
 
-Music metadata (titles, artist, artwork) comes from the [MusicIndex.org](https://musicindex.org) API (`https://api.musicindex.org/v1`). No API credentials are needed. Every album/track pair is stored as one row in the plugin's own `{prefix}v4v_musiclink[_pro]_cache` table, which also holds that pair's resolved Fountain.fm link. Cached metadata is served immediately and refreshed in the background once it is older than 12 hours (configurable, 1–720 hours; refresh only - rows are never evicted, so stale titles keep serving through a Music Index outage). A pair that has never been seen is fetched inline on first render, and failed lookups are remembered separately in WordPress transients (1 hour for definitive misses, 30 seconds for unreliable ones).
+Music metadata (titles, artist, artwork) comes from the [MusicIndex.org](https://musicindex.org) API (`https://api.musicindex.org/v1`). No API credentials are needed. Every album/track pair is stored as one row in the plugin's own `{prefix}v4v_musiclink_cache` table, which also holds that pair's admin-supplied Fountain.fm link. Cached metadata is served immediately and refreshed in the background once it is older than 12 hours (configurable, 1–720 hours; refresh only - rows are never evicted, so stale titles keep serving through a Music Index outage). A pair that has never been seen is fetched inline on first render, and failed lookups are remembered separately in WordPress transients (1 hour for definitive misses, 30 seconds for unreliable ones).
 
 ## Development
 

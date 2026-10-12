@@ -144,7 +144,6 @@ class Wpdb_Stub {
 $GLOBALS['wpdb'] = new Wpdb_Stub();
 
 require __DIR__ . '/../v4v-musiclink/v4v-musiclink.php';
-require __DIR__ . '/../v4v-musiclink-pro/v4v-musiclink-pro.php';
 
 $track_ok = json_encode( array( 'data' => array( 'title' => 'See Through', 'feed_title' => 'The Singles', 'track_artist' => 'Fentlay', 'image_url' => 'http://x/y.jpg' ) ) );
 $feed_ok  = json_encode( array( 'data' => array( 'title' => 'The Singles', 'release_artist' => 'Fentlay', 'image_url' => 'http://x/y.jpg' ) ) );
@@ -172,7 +171,6 @@ $cases = array(
 
 $classes = array(
 	'V4V_Music_Link_Resolver'     => 'v4v_musiclink_mi_refresh_hours',
-	'V4V_Music_Link_Resolver_Pro' => 'v4v_musiclink_pro_mi_refresh_hours',
 );
 $pass = 0; $fail = 0;
 

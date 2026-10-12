@@ -229,7 +229,6 @@ $_SERVER['REMOTE_ADDR'] = '203.0.113.7';
 $_SERVER['REQUEST_URI'] = '/musiclink';
 
 // --- The real plugin files ---
-require_once dirname( __DIR__ ) . '/v4v-musiclink-pro/v4v-musiclink-pro.php';
 require_once dirname( __DIR__ ) . '/v4v-musiclink/v4v-musiclink.php';
 
 // --- Harness helpers ---
@@ -330,84 +329,7 @@ seed_cache_row( $album, '', array( 'album_title' => 'Kind of Blue', 'artist' => 
 seed_cache_row( $album, $track, array( 'album_title' => 'Kind of Blue', 'track_title' => 'So What', 'artist' => 'Miles Davis' ) );
 seed_cache_row( $free, '', array( 'album_title' => 'Free Form Album', 'artist' => 'Free Artist' ) );
 
-$pro = new V4V_Music_Link_Resolver_Pro();
 $std = new V4V_Music_Link_Resolver();
-$wpdb = $GLOBALS['wpdb'];
-
-echo "\n--- #6: one URL for canonical/og:url/Share, escaped once ---\n";
-
-reset_state();
-$_SERVER['REQUEST_URI'] = '/musiclink?album=FEED1&track=TRK1&junk=evil';
-$_GET = array( 'album' => $album, 'track' => $track, 'junk' => 'evil' );
-
-$canonical = call_private( $pro, 'musiclink_canonical_url' );
-check( 'C1 helper returns the raw canonical URL (junk dropped, bare &)', $canonical, 'https://example.test/musiclink?album=FEED1&track=TRK1' );
-check( 'C2 get_canonical_url filter hands core an unescaped URL', $pro->fix_canonical_url( 'https://old.example/other', $GLOBALS['post'] ), $canonical );
-
-$out = $pro->rewrite_canonical_in_html( '<html><head><link rel="canonical" href="https://old.example/" /></head><body>x</body></html>' );
-contains( 'C3 buffer rewrite spits the same URL out escaped exactly once', $out, 'href="https://example.test/musiclink?album=FEED1&#038;track=TRK1"' );
-excludes( 'C4 ...and never as an entity of an entity', $out, '&amp;#038;' );
-
-ob_start();
-$pro->output_social_preview_meta();
-$og = ob_get_clean();
-contains( 'C5 plugin-only og:url is the canonical URL, escaped once', $og, '<meta property="og:url" content="https://example.test/musiclink?album=FEED1&#038;track=TRK1"' );
-excludes( 'C6 plugin-only og:url carries no raw request junk args', $og, 'junk=evil' );
-
-$site = $pro->rewrite_all_meta_in_html( '<html><head><title>Old</title><link rel="canonical" href="https://old.example/" /><meta property="og:url" content="https://old.example/" /></head><body>x</body></html>' );
-contains( 'C7 entire-site og:url rewritten to the canonical URL', $site, '<meta property="og:url" content="https://example.test/musiclink?album=FEED1&#038;track=TRK1"' );
-excludes( 'C8 entire-site og:url carries no raw request junk args', $site, 'junk=evil' );
-contains( 'C9 entire-site <title> rewrite still works alongside', $site, '<title>"So What" from Kind of Blue</title>' );
-
-$page = $pro->render( array() );
-contains( 'C10 Share data-url is the same canonical URL, escaped once', $page, 'data-url="https://example.test/musiclink?album=FEED1&#038;track=TRK1"' );
-excludes( 'C11 Share button no longer shares raw request junk args', $page, 'junk=evil' );
-
-echo "\n--- #3: length-only guid guard (no charset whitelist) ---\n";
-
-reset_state();
-check( 'G1 a 256-byte guid passes untouched', call_private( $pro, 'guard_guid', str_repeat( 'a', 256 ) ), str_repeat( 'a', 256 ) );
-check( 'G2 a 257-byte guid is dropped', call_private( $pro, 'guard_guid', str_repeat( 'a', 257 ) ), '' );
-check( 'G3 a free-form id survives the guard verbatim', call_private( $pro, 'guard_guid', $free ), $free );
-
-$_GET = array( 'album' => str_repeat( 'z', 300 ) );
-check( 'G4 an overlong query arg reads as absent', call_private( $pro, 'get_guid_arg', 'album' ), '' );
-$_GET = array( 'album' => $free );
-check( 'G5 a free-form query arg reads back verbatim', call_private( $pro, 'get_guid_arg', 'album' ), $free );
-
-reset_state();
-$_SERVER['REQUEST_URI'] = '/musiclink?album=' . str_repeat( 'z', 300 );
-$_GET = array( 'album' => str_repeat( 'z', 300 ) );
-check( 'G6 canonical URL drops an overlong guid entirely', call_private( $pro, 'musiclink_canonical_url' ), 'https://example.test/musiclink' );
-
-reset_state();
-$page = $pro->render( array( 'album' => str_repeat( 'z', 300 ) ) );
-contains( 'G7 overlong attribute falls back to the search UI', $page, 'v4v-musiclink-pro-search-input' );
-excludes( 'G8 ...without a not-found lookup having been attempted', $page, 'Album/Song not found' );
-check( 'G9 no Music Index call was made', $GLOBALS['__mi_calls'], 0 );
-
-reset_state();
-$_GET = array( 'album' => str_repeat( 'z', 300 ) );
-$fields = call_private( $pro, 'compute_preview_fields', $GLOBALS['post'] );
-check( 'G10 preview fields fall back for an overlong guid', $fields['title'], 'See Through by Fentlay' );
-check( 'G11 ...with no Music Index call', $GLOBALS['__mi_calls'], 0 );
-
-reset_state();
-$res = open_beacon( array( 'album' => str_repeat( 'z', 300 ), 'track' => '' ) );
-check( 'G12 the open beacon rejects an overlong guid with 400', $res['code'], 400 );
-check( 'G13 ...before any Music Index lookup', $GLOBALS['__mi_calls'], 0 );
-check( 'G14 ...and writes no log row', count( $wpdb->inserts ), 0 );
-
-reset_state();
-$res = beacon( array( 'album' => str_repeat( 'z', 300 ), 'track' => '', 'app' => 'stablekraft' ) );
-check( 'G15 the launch beacon rejects an overlong guid', $res['success'], false );
-check( 'G16 ...and writes no log row', count( $wpdb->inserts ), 0 );
-
-reset_state();
-$res = open_beacon( array( 'album' => $free, 'track' => '' ) );
-check( 'G17 a free-form id passes the guard end to end', $res['success'], true );
-check( 'G18 exactly one row logged', count( $wpdb->inserts ), 1 );
-check( 'G19 the row holds server-resolved titles, not the guid', $wpdb->inserts[0]['data']['album'], 'Free Form Album' );
 
 echo "\n--- #3 standard plugin: same guard on shortcode attributes ---\n";
 

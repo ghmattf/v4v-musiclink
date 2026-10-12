@@ -1,6 +1,6 @@
 # Outstanding items & findings
 
-The single running list of open work for the V4V MusicLink plugins, so any
+The single running list of open work for the V4V Music Link Resolver (standard) plugin, so any
 future session can pick up exactly where the last one stopped.
 
 **How this list is maintained** is codified in `AGENTS.md`
@@ -17,291 +17,12 @@ request. **On hold** = user deferred. **Open** = identified, awaiting triage.
 Line numbers below predate Resolver 1.22.25 / Pro 1.20.31 (2026-10-05)
 unless a note says otherwise; they will drift - re-locate by symbol name.
 
----
-
-## O3. View Log timestamps are shifted (`current_time` vs `get_date_from_gmt`)
-
-**Status: On hold** (user deferred 2026-09-25).
-
-**What:** `log_view()` stores `current_time( 'mysql' )` - site-**local**
-time (Pro ~line 324) - but the View Log table prints
-`get_date_from_gmt( $row->logged_at, 'Y-m-d H:i:s' )` (~line 1000), which
-treats that string as GMT and converts it to local again. On any site not
-at UTC the View Log shows times shifted by the site's GMT offset. Reports
-are already consistent (`get_report_date_bounds()` ~line 716 computes
-bounds with `wp_timezone()` = local, compared against local-stored rows),
-so this is display-only.
-
-**Plan sketch:** minimal fix is the View Log cell - print `logged_at`
-directly (it is already site-local) instead of `get_date_from_gmt()`. Do
-**not** switch storage to GMT: that would misread every existing row and
-desync the report bounds. Also check View Log header/notes for wording
-about displayed timezones. Probe first if site timezone != UTC (phafe.com
-is currently UTC, which hides the bug).
-
----
-
-## O5. Settings readout: last Fountain attempt
-
-**Status: On hold** (user deferred 2026-09-25).
-
-**What:** Fountain "next-action" self-heal state is invisible to admins.
-Today there is only the in-memory `last_fountain_status` property (Pro
-~line 186, standard ~line 116), the `fountain_autodetect_throttle(_pro)`
-transient (Pro ~line 2757), and the stored `..._fountain_next_action`
-option. If the background self-heal keeps failing, nobody can see that it
-ran, when, or with what result.
-
-**Plan sketch:** persist an attempt record - option
-`v4v_musiclink(_pro)_fountain_last_attempt` = timestamp + HTTP status -
-whenever `fountain_autodetect_next_actions()` runs (standard ~line 1030,
-Pro ~line 2756); render a read-only line next to the "next-action" field
-on each settings page (standard ~line 472, Pro ~line 1508): "Last attempt:
-2026-09-25 12:00 - status 404" or "never attempted". Both plugins. A
-manual "Test now" button would be a scope extension - only if the user
-asks.
-
----
-
-## O7. Fountain self-heal is slow to recover (or never fires) - diagnosis
-
-**Status: On hold** (user deferred 2026-10-05 - diagnosis kept, nothing
-picked; the review notes below are current as of that date).
-
-**What:** why, once self-heal is required, the button takes far too long
-to start working again. Causes found this turn in `fountain_resolve()` /
-`fountain_autodetect_next_actions()` (standard `fountain_resolve()` 1847,
-`fountain_try_resolve()` 1914, `fountain_autodetect_next_actions()` 2049,
-`fountain_scan_chunks_for_actions()` 2138; Pro 3569 / 3636 / 3771 / 3860),
-roughly ranked:
-
-1. Positive cache keyed on the hash - see O6 (also makes *whether*
-   self-heal runs depend on which guid renders first).
-2. The 15-minute throttle is armed **before** the attempt, unconditionally
-   (standard 2050-2054, Pro 3771-3776), so any outcome -
-   no candidates, unreachable seed page, aborted crawl - still costs a
-   full 15 minutes of no effort, and consecutive failures stack.
-3. The crawl runs synchronously inside the visitor's page render: 2 seed
-   pages x 10s timeout + up to 20 delta chunks x 8s (plus up to 20
-   fallback chunks x 8s when the delta is empty - the two-phase gate
-   shipped with 1.22.24), plus the stale POST (8s) and retry (8s) ~ the
-   theoretical worst is still ~6 minutes in one request, but a routine
-   self-heal measured **~10s** on 2026-10-05 (the pre-gate always-walk was
-   34s measured / ~5.5 min worst). If a
-   proxy/PHP/client timeout kills it before `update_option()`, the work
-   is discarded while the already-committed throttle transient blocks the
-   next 15 minutes.
-4. ~~`update_option()` only runs `if ( $result )`, so a *fresh* hash whose
-   readable payload lacks this guid is never persisted - indistinguishable
-   from "still stale" - producing a detect/fail loop.~~ **Fixed 2026-10-05
-   (Resolver 1.22.24 / Pro 1.20.30):** a candidate that answers with a
-   readable hits payload is now persisted even when our guid is absent.
-5. ~~Deterministic first-candidate short-circuit: if the first
-   near-"search" hex isn't the right action, detection returns the same
-   wrong value forever until Fountain's chunk order changes.~~ **Fixed
-   2026-10-05 (Resolver 1.22.24 / Pro 1.20.30):** detection returns every
-   candidate (`fountain_autodetect_next_actions()`) and `fountain_resolve()`
-   probes them in order - this was O11, released today.
-6. Demand-driven only - no cron. Healing needs a render with a Fountain
-   button that also gets a Music Index search text - the attempt is skipped
-   entirely otherwise (standard `render()` 1747-1750; MI "not found" is
-   negative-cached for 1 hour, `FAIL_CACHE_TTL` std 108), so on a
-   quiet site attempts are naturally minutes-to-hours apart.
-7. Unverified: site page caching may keep serving plain/stale HTML past
-   the plugin's own heal.
-8. **2026-10-05 observation (not a regression - baseline behaves the same):**
-   `last_fountain_hits_parsed` is reset at the top of `fountain_try_resolve()`,
-   so an answer served from the negative cache leaves it false. A release
-   Fountain does not index therefore stops the crawl on the render that
-   actually POSTed (the new "stored id is live, give up early" branch) but
-   re-enters self-heal once that miss is being served from cache - i.e. the
-   crawl can still repeat every 15 minutes for such releases. Making the
-   negative cache remember *whether* it was parsed (`''` vs a marker) would
-   close it; only worth it if the crawl cost ever matters.
-
-**2026-10-05 review (Fountain working again - `fountain_live_test.php`
-20/20 on the 1.22.24 / 1.20.30 release):** with causes 4 and 5 fixed and
-stored links (1.22.17 / 1.20.23) covering every release that has rendered
-once, this item now only concerns the *first* resolution after a redeploy.
-Still live and unchanged: 1 (= O6), 2, 3 (typical cost only - see above),
-6, 7, 8. Cause 3's timeout-discards-the-work hazard remains the sharpest
-one, because the throttle is already committed by then (cause 2). No fix
-picked yet - see the triage question below.
-
-**Plan sketch (options identified, none picked):** ~~validate-on-200 and
-persist regardless of our guid (1+4)~~ done 2026-10-05;
-~~return a candidate list tried in order until one yields a readable hits
-payload (5)~~ done 2026-10-05 (that was O11); arm the throttle
-after a completed attempt with a 30-60s backoff on failure, keeping 15
-minutes only after a conclusive scan (2); time-box the crawl and run it
-via `fastcgi_finish_request()`/`shutdown` so a page timeout can't eat the
-attempt (3); record every attempt - timestamp, stage reached, status,
-candidate - which doubles as the O5 settings readout (6, diagnosis); a
-cron-driven heal so recovery doesn't depend on traffic (6); positive
-revalidation policy (7, shared with O6's open question).
-
-**Mitigated (not fixed) by the stored-links work:** Resolver 1.22.17 /
-Pro 1.20.23 make an already-resolved release immune to everything above -
-its button URL now comes from the database, not from the hash, a
-transient, or the self-heal - so the observed "homepage for 30+ minutes"
-symptom can no longer recur for releases that have rendered once since
-the upgrade. This item still matters for the *first* resolution after a
-redeploy, which no stored row covers.
-
-**Blocked on:** the user confirming which symptom is observed - plain
-`fountain.fm` fallback vs a deep link Fountain rejects.
-
----
-
-## O9. The live Fountain probes hardcode a rotated `next-action` token, so they now 404
-
-**Status: On hold** (user deferred 2026-10-05 - fixture work not picked;
-the plan below is current as of that date).
-
-**What:** `tmp/fountain_candidate_test.php` and `tmp/fountain_case_test.php`
-both POST to `https://fountain.fm/search` with a **hardcoded** `next-action`
-header - `$SID` = `605af9c39c662ad04c72e52279d6db26f12973e250`
-(`fountain_case_test.php` line 13) and a fixed candidate list passed to
-`resolve_with()` (`fountain_candidate_test.php`). On the 2026-09-26 release
-run both returned HTTP 404 with body `Server action not found.` on *every*
-request (re-run once, identical), i.e. Fountain has rotated the action hash
-those fixtures were captured against.
-
-**This is a stale fixture, not a plugin bug.** `tmp/fountain_live_test.php`
-autodetects the current next-action from the `/search-page` chunks exactly as
-the shipped `fountain_autodetect_next_actions()` does, and it passed 20/20
-against the same endpoint in the same run - so the production search path is
-fine. Neither failing probe loads plugin code for its request either.
-
-**Re-verified 2026-10-05 (Fountain working again - `fountain_live_test.php`
-20/20 on the 1.22.24 / 1.20.30 release):** every hardcoded-token file still
-404s on every POST, `Server action not found.` -
-`fountain_case_test.php` (all 4 requests; its deliberate bogus-token
-assertion at line 80 still passes as a 404),
-`fountain_candidate_test.php` (both entries of the fixed list: `605af9c3…`
-and `40654cc3…`), and a **third** live file this item did not know about:
-`fountain_extract_verify.php` (`$SEARCH_ID` line 14, curl POST to
-`/search` - 404 on both header variants it tests). The working ids that day
-were `60f00dce…`, `60f643a9…`, `40089971…`, `60944205…` - rotation
-continued, the fixtures did not. `fountain_search_matrix.php` and
-`fountain_shape_matrix.php` also carry the old hex but make no network
-calls (offline parsing fixtures) - they need no change.
-
-**Plan sketch:** make the three live probes detect rather than embed - reuse
-the chunk scan `fountain_live_test.php` already has (or call the plugin's
-`fountain_autodetect_next_actions()` and feed one candidate from its list
-into the `next-action` header - since 1.22.24 / 1.20.30 it returns a list,
-and the plugin itself probes rather than trusts it);
-keep the bogus-token request `fountain_case_test.php` already makes as the
-deliberate stale-hash 404 assertion. Fold "the token must be detected, not
-captured" into O4's `tests/` move so the fixtures cannot rot silently again.
-
----
-
-## O10. Fountain now publishes an official API - the plugin still uses the internal `/search` server action
-
-**Status: On hold** (user deferred 2026-09-26, after the unauthenticated
-probe below; no code changes made, re-open only on request).
-
-**2026-10-05 note:** nothing is blocked on O10 - the O11 fix shipped
-through the internal server-action path instead (probe every detected
-candidate instead of trusting the first, Resolver 1.22.24 / Pro 1.20.30),
-so the official API stays a "delete this whole redeploy-breaks-us class"
-option rather than a dependency. The one remaining unknown is unchanged:
-whether a real key returns album/track hits carrying `_guid` (one
-authenticated call).
-
-**What:** while reviewing the project against Fountain's Terms of Use
-(`https://fountain.fm/terms-of-use`, last updated 2026-09-16) it turned out
-Fountain now ships a documented public API that did not exist when this
-plugin was written:
-
-- `POST https://api.fountain.fm/v1/search/content` with
-  `Authorization: Bearer $FOUNTAIN_API_KEY`, body `{"query":..., "types":["SHOW","EPISODE"]}`
-  (docs: `https://fountain.fm/docs/endpoints/search`, markdown via
-  `https://fountain.fm/llms.txt`; key/FAQ: `/faq/api-keys`; MCP at
-  `https://api.fountain.fm/v1/mcp`).
-- The 200 payload is `hits[]` carrying `_id`, `_type`, `_guid` and
-  `info.title`/`subtitle`/`publisher` - i.e. **the same fields
-  `extract_fountain_hit()` already parses** (standard ~line 1834, Pro ~3548).
-
-The plugin instead POSTs to the **undocumented internal Next.js server
-action** `https://fountain.fm/search` with a detected `next-action` hash,
-`Origin`/`Referer` of fountain.fm and a spoofed Chrome 151 User-Agent
-(`fountain_try_resolve()` standard ~1596, Pro ~3310), plus a self-heal crawl
-of 2 seed pages and up to ~40 `/_next/static/*.js` chunks to rediscover that
-hash (`fountain_autodetect_next_actions()` standard ~1714, Pro ~3428).
-
-**Compliance read (not legal advice):** no clause of the ToS is plainly
-breached - §10 bans "disrupt[ing] or exploit[ing] the platform" but says
-nothing about automated access, `robots.txt` is `Allow: /`, the plugin is
-unauthenticated (so §11's account/agent authorisation is not engaged), holds
-no account to suspend (§3/§14), and request volume is low, cached (30-day
-positive / 1-hour negative transients) and throttled (15-minute self-heal).
-The honest description is **"not prohibited, but now off the sanctioned
-path"**: the spoofed browser UA and the reliance on a reverse-engineered
-build hash are the two soft spots (§10's undefined "exploit"; a UA-based
-block later would be inconvenient to answer honestly).
-
-**Probe results (2026-09-26, unauthenticated):**
-- `POST https://api.fountain.fm/v1/search/content` with no key **and** with a
-  bogus `Bearer` both return `403 {"ok":false,"error":{"code":"FORBIDDEN",
-  "message":"Not authorized."}}` - a key is required; the two cases are
-  indistinguishable. Cloudflare in front, `access-control-allow-origin: *`,
-  **no rate-limit headers** on the 403.
-- Keys: created from `fountain.fm/studio/projects`, prefix `fountain_`, sent
-  as `Authorization: Bearer <key>`, base `https://api.fountain.fm/v1`.
-- Cost/volume: FAQ `/faq/api-keys` - *"API and MCP calls are unlimited on
-  every plan, so there is no metering on the calls themselves"*; pricing page
-  - *"Drafts, searches, and API and MCP calls are free"* (no credits burnt).
-  Plans are Lite $25/mo, Pro $50/mo, Custom - so a project sits behind a
-  podcaster/artist account, not a free listener account (unconfirmed).
-- Scope: `POST /search/content` body is only `query` / `types` / `parent` -
-  **no project parameter**, and the docs describe it as "Search across
-  Fountain: content, transcripts, and Nostr profiles", so the index read is
-  global rather than limited to the caller's connected shows (needs one real
-  call to confirm).
-- `types` accepts `SHOW|EPISODE|ARTIST|ALBUM|TRACK|CLIP` - i.e. albums and
-  tracks, exactly this plugin's domain.
-- `ContentHit` = `_id` (`{type}:id:{id}`), `_type` (uppercase), `_guid`
-  (**optional** - "Podcast GUID, when the content originates from an RSS
-  feed"), `info.title`/`subtitle`/`publisher`/`audio`/`video`/`duration`,
-  `links`.
-- OAuth alternative for agent flows: `authorization_code` + PKCE (S256),
-  public client (`token_endpoint_auth_methods: ["none"]`), endpoints
-  `/v1/oauth/authorize` and `/v1/oauth/token`, protected resource `/v1/mcp`.
-
-**Fit with the existing code (from reading, not yet executed):**
-- `fountain_path_segment()` (std ~1877) already maps uppercase
-  `TRACK`/`ALBUM`/`EPISODE`/`SHOW` - compatible with the official `_type`.
-- `extract_fountain_hit()` matches on `_guid` (std ~1834) - but the official
-  `_guid` is optional, so a hit without one would never match; needs a
-  fallback (match on `info.title`/`subtitle`, or `_id` shape) plus a probe to
-  see whether album/track hits actually carry `_guid`.
-- The URL is built as `https://fountain.fm/{segment}/{_id}` (std ~1468-1471),
-  but official `_id` is `episode:id:abc123` - the `{type}:id:` prefix must be
-  stripped before use.
-
-**Plan sketch:**
-- ~~Probe the official endpoint~~ done 2026-09-26 (above); the remaining
-  unknowns - does a real key return album/track hits with `_guid`, and does
-  search return content the caller does not host - need one authenticated
-  call, i.e. an actual Fountain project + API key.
-- If usable: add an optional "Fountain API key" setting (server-side only,
-  never printed into page markup), call the official endpoint from
-  `fountain_resolve()`, and map `hits[]` into the same `_guid`/`_id`/`_type`
-  shape so `extract_fountain_hit()` and `fountain_path_segment()` stay as-is.
-- Keep the current server-action path as an automatic fallback when no key
-  is configured, so existing installs don't regress; this also gives a
-  second answer to O7 (self-heal churn disappears for keyed installs).
-- Both plugins, unchanged per-plugin keyspaces. Remove this item when the
-  API path ships (or when the user declines it).
-
+**Repo split (2026-10-11):** this repository now hosts the standard plugin only; Pro-side items live in `ghmattf/v4v-musiclink-pro`. Closed decisions are kept intact in both repositories for context.
 ---
 
 ## O13. "Flush Music Index data" action on the Cache tab
 
-**Status: On hold** (user deferred 2026-10-03 - declined as part of the
+**Status: On hold** (user deferred 2026-10-03 - declined as part of the Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink` for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split.
 unified cache-table work of that day, listed at the user's request;
 implement only if re-picked).
 
@@ -320,12 +41,11 @@ fill used for a pair with no cached MI data).
 (never `TRUNCATE`); confirmation wording distinguishes it from
 "Clear all" (which still deletes whole rows, links included); notice
 reports the affected row count. Both plugins, full rename applied.
-
 ---
 
 ## O14. No matching cache row → ignore transient TTLs and refresh live
 
-**Status: Planned** (user requested 2026-10-04; they asked for the design
+**Status: Planned** (user requested 2026-10-04; they asked for the design Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink` for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split.
 answer first - implement only on their go-ahead. Ordering is now settled:
 O11 shipped first, on 2026-10-05, so O14 may follow whenever they pick it).
 
@@ -373,12 +93,11 @@ has to wait on anything.
 (identical after `_pro` normalization); extend `tmp/test_stored_links.php`
 with: no row + remembered MI miss => live fetch runs; no row + cached
 Fountain hit => POST attempted; row present => both still honoured.
-
 ---
 
 ## O18. New shortcode parameter accepting a direct fountain.fm link (both versions) - attribute only, never a URL query param
 
-**Status: On hold** (user deferred 2026-10-05 - scope and precedence
+**Status: On hold** (user deferred 2026-10-05 - scope and precedence Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink` for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split.
 decisions from that day are retained below).
 
 **What:** a `fountain` attribute on BOTH shortcodes (`[musiclink]` and
@@ -452,7 +171,6 @@ matrix plus render assertions per plugin (valid attr -> button href, attr
 outranks a conflicting cache row, invalid attr -> falls back, attribute
 never reaches `store_fountain_link()` unless open decision 1 says so);
 README usage sections for both versions gain the attribute.
-
 ---
 
 ## O26. WordPress.org Plugin Directory submission readiness - standard plugin

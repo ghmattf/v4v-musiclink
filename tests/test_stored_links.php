@@ -364,7 +364,6 @@ class Fake_Wpdb {
 $GLOBALS['wpdb'] = new Fake_Wpdb();
 
 require __DIR__ . '/../v4v-musiclink/v4v-musiclink.php';
-require __DIR__ . '/../v4v-musiclink-pro/v4v-musiclink-pro.php';
 
 // --- helpers -------------------------------------------------------------
 define( 'CACHE_COLS', array(
@@ -498,24 +497,6 @@ $classes = array(
 			'clear'  => 'v4v_musiclink_clear_cache',
 			'update' => 'v4v_musiclink_update_cache_row',
 			'delete' => 'v4v_musiclink_delete_cache_row',
-		),
-	),
-	'V4V_Music_Link_Resolver_Pro' => array(
-		'table'       => 'wp_v4v_musiclink_pro_cache',
-		'version_opt' => 'v4v_musiclink_pro_cache_table_version',
-		'random_opt'  => 'v4v_musiclink_pro_random_app_order',
-		'apps_opt'    => 'v4v_musiclink_pro_apps',
-		'track_key'   => 'mi_track_pro_v4_',
-		'feed_key'    => 'mi_feed_pro_v4_',
-		'hit_key'     => 'fountain_id_pro_v5_',
-		'next_opt'    => 'v4v_musiclink_pro_fountain_next_action',
-		'mi_opt'      => 'v4v_musiclink_pro_mi_refresh_hours',
-		'attempt'     => 'v4v_musiclink_pro_mi_attempt_',
-		'action'     => 'v4v_musiclink_pro',
-		'nonces'      => array(
-			'clear'  => 'v4v_musiclink_pro_clear_cache',
-			'update' => 'v4v_musiclink_pro_update_cache_row',
-			'delete' => 'v4v_musiclink_pro_delete_cache_row',
 		),
 	),
 );

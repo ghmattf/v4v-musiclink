@@ -161,7 +161,6 @@ function seed_row( $album, $track, array $fields ) {
 }
 
 require __DIR__ . '/../v4v-musiclink/v4v-musiclink.php';
-require __DIR__ . '/../v4v-musiclink-pro/v4v-musiclink-pro.php';
 
 $album = 'd5c805fb-6016-4038-9cda-2e68d2b8dcc4';
 $track = 'cbdaeaa0-3c58-41ce-92d1-c718710ade54';
@@ -171,7 +170,6 @@ $feed_ok   = array( 'title' => 'The Singles', 'artist' => 'Fentlay', 'image' => 
 
 $classes = array(
 	'V4V_Music_Link_Resolver'      => array( 'mi_track_v4_', 'mi_feed_v4_' ),
-	'V4V_Music_Link_Resolver_Pro'  => array( 'mi_track_pro_v4_', 'mi_feed_pro_v4_' ),
 );
 
 $pass = 0; $fail = 0;
