@@ -1,5 +1,5 @@
 === V4V Music Link Resolver ===
-Contributors: ghmattf
+Contributors: phafe
 Tags: music, links, sharing, fountain, stablekraft
 Requires at least: 5.8
 Tested up to: 7.1.3

@@ -175,10 +175,32 @@ README usage sections for both versions gain the attribute.
 
 ## O26. WordPress.org Plugin Directory submission readiness - standard plugin
 
-**Status: Open** (identified 2026-10-11; blockers 1-4 implemented and
-released as Resolver 1.22.31 on 2026-10-12 - what remains is the human
-submission process below, plus keeping the Music Index permission
-evidence on hand).
+**Status: Open** (blockers 1-4 implemented and released as Resolver
+1.22.31 on 2026-10-12; readme validator CLEAN 2026-10-14 with the
+user's username `phafe` - what remains: Plugin Check run (user, in any
+WP admin), the human submission itself, assets upload after approval,
+plus keeping the Music Index permission evidence on hand).
+
+**Progress 2026-10-14 (pre-submission gates):**
+- **Official readme validator: CLEAN** (HTTP POST of `wp_plugin/readme.txt`
+  to wordpress.org/plugins/developers/readme-validator/): **0 errors,
+  0 warnings** after the user supplied their username - `Contributors:
+  phafe` (2026-10-14). Only 3 informational notes remain, all optional:
+  no `== Upgrade Notice ==`, no `== Screenshots ==`, no donate link.
+  An earlier run (2026-10-13, placeholder `ghmattf`) warned that the
+  contributor did not exist; that warning is gone with `phafe`.
+- **Directory assets generated** (ImageMagick, at `tmp/wporg-assets/`,
+  gitignored scratch - copy somewhere durable or commit on request):
+  `banner-1544x500.png` + `banner-772x250.png` (dark gradient, music
+  note, title + app list) and `icon-256x256.png` + `icon-128x128.png`
+  (rounded-square gradient + note). These upload to the SVN `assets/`
+  dir (or the dev dashboard "Assets" tab) AFTER approval - not in the zip.
+- **Plugin Check (official plugin) not yet run** - needs a WordPress
+  install; none available locally (no docker/node for wp-env or
+  Playground CLI). User options: run Plugin Check in any WP admin
+  (install the "Plugin Check" plugin, upload the zip there), or use
+  https://wordpress.net/playground with the zip. Zip staged at
+  `tmp/v4v-musiclink-1.22.31.zip` (v4v-musiclink.php + readme.txt only).
 
 **What:** compliance audit of standard 1.22.30 against the wp.org plugin
 guidelines, the common-issues list, and the submission process (sources
@@ -202,8 +224,8 @@ all four code/docs blockers below are fixed in 1.22.31.
    **RESOLVED 1.22.31**: `wp_plugin/readme.txt` written (Stable tag
    1.22.31, Tested up to 7.1.3 per the user's own test, external-
    services disclosure incl. the Music Index permission note). The
-   `Contributors:` header currently reads `ghmattf` - the user must
-   confirm it matches their actual wp.org username before upload.
+   `Contributors:` header reads `phafe` (user's wordpress.org username,
+   supplied 2026-10-14; accepted by the readme validator).
 2. **No GPL declaration** - plugin header (:1-79) has no `License:` /
    `License URI:` and no LICENSE file ships in `wp_plugin/`.
    Guideline 1; a known rejection reason ("No GPL-compatible license
