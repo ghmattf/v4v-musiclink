@@ -1,6 +1,6 @@
 # Outstanding items & findings
 
-The single running list of open work for the V4V Music Link Resolver (standard) plugin, so any
+The single running list of open work for the V4V MusicLinker (standard) plugin (formerly "V4V Music Link Resolver", renamed at 1.0.0), so any
 future session can pick up exactly where the last one stopped.
 
 **How this list is maintained** is codified in `AGENTS.md`
@@ -177,9 +177,11 @@ README usage sections for both versions gain the attribute.
 
 **Status: Open** (blockers 1-4 implemented and released as Resolver
 1.22.31 on 2026-10-12; readme validator CLEAN 2026-10-14 with the
-user's username `phafe` - what remains: Plugin Check run (user, in any
-WP admin), the human submission itself, assets upload after approval,
-plus keeping the Music Index permission evidence on hand).
+user's username `phafe` - what remains: **rebuild the submission zip
+after the 1.0.0 rebrand (O27, same day; validator re-run CLEAN)**, the
+Plugin Check run (user, in any WP admin), the human submission itself,
+assets upload after approval, plus keeping the Music Index permission
+evidence on hand).
 
 **Progress 2026-10-14 (pre-submission gates):**
 - **Official readme validator: CLEAN** (HTTP POST of `wp_plugin/readme.txt`
@@ -189,18 +191,26 @@ plus keeping the Music Index permission evidence on hand).
   no `== Upgrade Notice ==`, no `== Screenshots ==`, no donate link.
   An earlier run (2026-10-13, placeholder `ghmattf`) warned that the
   contributor did not exist; that warning is gone with `phafe`.
+  **Re-run 2026-10-14 after the 1.0.0 rebrand: still CLEAN** - 0 errors,
+  0 warnings on the new title/shortcode/Stable tag, same 3 optional
+  informational notes.
 - **Directory assets generated** (ImageMagick, at `tmp/wporg-assets/`,
   gitignored scratch - copy somewhere durable or commit on request):
   `banner-1544x500.png` + `banner-772x250.png` (dark gradient, music
   note, title + app list) and `icon-256x256.png` + `icon-128x128.png`
   (rounded-square gradient + note). These upload to the SVN `assets/`
-  dir (or the dev dashboard "Assets" tab) AFTER approval - not in the zip.
+  dir (or the dev dashboard "Assets" tab) AFTER approval - not in the
+  zip. They still say the old title and should be regenerated with
+  "V4V MusicLinker" before upload.
 - **Plugin Check (official plugin) not yet run** - needs a WordPress
   install; none available locally (no docker/node for wp-env or
   Playground CLI). User options: run Plugin Check in any WP admin
   (install the "Plugin Check" plugin, upload the zip there), or use
-  https://wordpress.net/playground with the zip. Zip staged at
-  `tmp/v4v-musiclink-1.22.31.zip` (v4v-musiclink.php + readme.txt only).
+  https://wordpress.net/playground with the zip. The old staged zip
+  (`tmp/v4v-musiclink-1.22.31.zip`) is obsolete after the 1.0.0
+  rebrand - rebuild by hand as e.g. `tmp/v4v-musiclinker-1.0.0.zip`
+  containing a `v4v-musiclinker/` folder with `v4v_musiclinker.php` +
+  `readme.txt` only (the zip folder name is the directory slug).
 
 **What:** compliance audit of standard 1.22.30 against the wp.org plugin
 guidelines, the common-issues list, and the submission process (sources
@@ -255,10 +265,10 @@ all four code/docs blockers below are fixed in 1.22.31.
    Plugin URI (GitHub repo), Author URI (phafe.com).
 
 **Submission process steps (no code):**
-- Pick the directory slug = `v4v-musiclink` (fixed at first submission;
-  it must equal the text domain or all 152 refs need rewriting).
+- Pick the directory slug = `v4v-musiclinker` (fixed at first
+  submission; matches the text domain since the 1.0.0 rebrand).
 - Build the zip by hand (bump-version.sh makes git commits, not zips):
-  include `wp_plugin/v4v-musiclink.php` + new readme.txt, **exclude
+  include `wp_plugin/v4v_musiclinker.php` + readme.txt, **exclude
   `wp_plugin/archive/`** (gitignored historical backups - wp.org
   flags "Included Unneeded Folders") and any `.git`.
 - Run the official **Plugin Check** plugin + the readme validator before
@@ -324,6 +334,12 @@ all four code/docs blockers below are fixed in 1.22.31.
 
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
+- **O27 rebrand decisions** (all settled 2026-10-14 while implementing,
+  recommendations adopted): `[musiclink]` kept as a deprecated alias
+  beside `[v4v_musiclinker]`; admin labels renamed to "V4V MusicLinker";
+  directory slug `v4v-musiclinker`; text domain renamed WITH the slug;
+  class renamed to `V4V_MusicLinker`; CHANGELOG history kept intact with
+  the 1.0.0 entry prepended. Released as V4V MusicLinker 1.0.0.
 - **Standard-plugin security review** (2026-10-06): no critical or
   high-severity findings across every surface (shortcode intake, output
   escaping, admin-post nonces/caps, REST gate, prepared SQL, fixed-host

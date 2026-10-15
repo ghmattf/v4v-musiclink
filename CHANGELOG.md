@@ -1,7 +1,21 @@
 # Changelog
 
-All notable changes to the V4V Music Link Resolver (standard) plugin are documented here.
+All notable changes to the V4V MusicLinker (standard) plugin — formerly "V4V Music Link Resolver", renamed at 1.0.0 — are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/). The Pro plugin is maintained in the sibling repository `ghmattf/v4v-musiclink-pro`.
+
+## V4V MusicLinker (v4v-musiclinker) — [1.0.0] - 2026-10-14
+
+### Changed
+
+- **Rebrand to "V4V MusicLinker", version line reset to 1.0.0** (O27; done ahead of the first WordPress.org submission, whose slug/readme title/Stable tag are fixed at first submission):
+  - **Display name** — plugin header `Plugin Name`, the admin menu / settings-page labels, the usage help, and all project docs now say "V4V MusicLinker".
+  - **Shortcode** — `[v4v_musiclinker]` is the registered tag (registration, the `shortcode_atts_…` filter name, the block JS save-string, and every help/doc example). The pre-1.0.0 `[musiclink]` tag stays registered as a **deprecated alias**, so already-published posts and saved block content keep rendering (Pro's `[musiclink_pro]` is unaffected).
+  - **File** — `wp_plugin/v4v-musiclink.php` → `wp_plugin/v4v_musiclinker.php` (`bump-version.sh`, the harness `require` lines, and the lint paths in `AGENTS.md`/`CONTRIBUTING.md`/`README.md`/`php/install.sh` updated; git tags before `v1.0.0` still carry the old path).
+  - **Text domain** — `v4v-musiclink` → `v4v-musiclinker` (translation-call sites and the plugin header only), so the domain matches the planned directory slug `v4v-musiclinker`.
+  - **Class** — `V4V_Music_Link_Resolver` → `V4V_MusicLinker`.
+  - **Version** — plugin header + script cache-buster set to `1.0.0` by hand (the reset skips `bump-version.sh`, which only increments); `wp_plugin/readme.txt` gains `Stable tag: 1.0.0` and a matching changelog entry.
+  - **Deliberately unchanged** (data preservation + Pro coexistence): option names (`v4v_musiclink_*`), the `{prefix}v4v_musiclink_cache` table, the REST namespace `v4v-musiclink/v1`, asset/script handles, the block name `v4v-musiclink/musiclink`, the admin page slug `page=v4v-musiclink`, and the CSS class names.
+- Harness pins updated across the suite (heading text "V4V MusicLinker", the block-JS shortcode string) and `test_block_rest` grows 98 → 100: it now pins that the constructor registers `v4v_musiclinker` and keeps the legacy `musiclink` alias.
 
 ## Resolver (v4v-musiclink) — [1.22.31] - 2026-10-12
 
