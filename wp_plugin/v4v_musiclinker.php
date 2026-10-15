@@ -1,14 +1,14 @@
 <?php
 /**
- * Plugin Name: V4V Music Link Resolver
- * Description: Provides a [musiclink] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
- * Version: 1.22.31
+ * Plugin Name: V4V MusicLinker
+ * Description: Provides a [v4v_musiclinker] shortcode (album/track attributes required) that renders Stablekraft, PodTunes.app, v4vmusic.com, and Fountain links for a V4V music album/track.
+ * Version: 1.0.0
  * Author: Matt Finlay
  * Plugin URI: https://github.com/ghmattf/v4v-musiclink
  * Author URI: https://phafe.com
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain: v4v-musiclink
+ * Text Domain: v4v-musiclinker
  * Requires at least: 5.8
  * Tested up to: 7.1.3
  * Requires PHP: 7.4
@@ -25,16 +25,16 @@
  * 2. Use the shortcode inline in any post/page, with explicit attributes -
  *    this is the ONLY way to use it; there is no URL-parameter or search
  *    UI mode:
- *    [musiclink album="{album-guid}"]
- *    [musiclink album="{album-guid}" track="{track-guid}"]
- *    [musiclink album="{album-guid}" header="false"]
- *    A bare [musiclink] with no attributes, or one with any attribute
+ *    [v4v_musiclinker album="{album-guid}"]
+ *    [v4v_musiclinker album="{album-guid}" track="{track-guid}"]
+ *    [v4v_musiclinker album="{album-guid}" header="false"]
+ *    A bare [v4v_musiclinker] with no attributes, or one with any attribute
  *    name other than album/track/header, shows a "Missing parameter(s)"
  *    message with these same usage examples rather than guessing at intent.
  *
  * HEADER CONTROLS: whether the release header (title, artist, artwork)
  * appears above the buttons defaults to the "Release header" Show/Hide
- * drop-down under Settings > V4V MusicLink (default: Show). The optional
+ * drop-down under Settings > V4V MusicLinker (default: Show). The optional
  * header="true" / header="false" shortcode attribute overrides that
  * setting per placement - useful when one page wants the bare button
  * list while the site default is the opposite. Unrecognized header
@@ -55,7 +55,7 @@
  *   if no title is known). The Pro version resolves links itself via
  *   the unofficial Server Action endpoint, with background self-healing.
  *
- * PER-APP CONTROLS: under Settings > V4V MusicLink, each of the four
+ * PER-APP CONTROLS: under Settings > V4V MusicLinker, each of the four
  * apps (Stablekraft, PodTunes.app, v4vmusic.com, Fountain) can be
  * individually disabled (hides its button entirely) and/or given a custom
  * icon URL overriding the default live favicon.
@@ -74,7 +74,7 @@
  * has been sent (plain PHP on the shutdown hook - no cron, no queue),
  * so a Music Index outage can't blank an already-seen release. When
  * that refresh is triggered is admin-configurable (Settings >
- * V4V MusicLink, "Music Index refresh", default 12 hours), and only
+ * V4V MusicLinker, "Music Index refresh", default 12 hours), and only
  * front-end page renders may trigger it - never search or logging.
  * Fountain.fm links are permanent: they never go stale and are never
  * auto-refreshed (blank a link on the Cache tab to drop the button back
@@ -90,7 +90,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // No direct access.
 }
 
-class V4V_Music_Link_Resolver {
+class V4V_MusicLinker {
 
 	const MI_ROOT        = 'https://api.musicindex.org';
 	const MI_API_BASE    = 'https://api.musicindex.org/v1';
@@ -189,6 +189,9 @@ class V4V_Music_Link_Resolver {
 	private $row_memo = array();
 
 	public function __construct() {
+		add_shortcode( 'v4v_musiclinker', array( $this, 'render' ) );
+		// Legacy alias for placements written before the 1.0.0 rebrand;
+		// new content should use [v4v_musiclinker].
 		add_shortcode( 'musiclink', array( $this, 'render' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
 		add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
@@ -214,8 +217,8 @@ class V4V_Music_Link_Resolver {
 
 	public function register_settings_page() {
 		add_options_page(
-			__( 'V4V MusicLink', 'v4v-musiclink' ),
-			__( 'V4V MusicLink', 'v4v-musiclink' ),
+			__( 'V4V MusicLinker', 'v4v-musiclinker' ),
+			__( 'V4V MusicLinker', 'v4v-musiclinker' ),
 			'manage_options',
 			'v4v-musiclink',
 			array( $this, 'render_settings_page' )
@@ -432,12 +435,12 @@ class V4V_Music_Link_Resolver {
 		?>
 		<div class="wrap">
 			<h1>
-				<?php esc_html_e( 'V4V MusicLink Settings', 'v4v-musiclink' ); ?>
+				<?php esc_html_e( 'V4V MusicLinker Settings', 'v4v-musiclinker' ); ?>
 				<span class="description">
 					<?php
 					printf(
 						/* translators: %s: this plugin's version number. */
-						esc_html__( 'Version %s', 'v4v-musiclink' ),
+						esc_html__( 'Version %s', 'v4v-musiclinker' ),
 						esc_html( $this->plugin_version() )
 					);
 					?>
@@ -445,10 +448,10 @@ class V4V_Music_Link_Resolver {
 			</h1>
 			<h2 class="nav-tab-wrapper">
 				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink&tab=settings' ) ); ?>" class="nav-tab <?php echo 'settings' === $active_tab ? 'nav-tab-active' : ''; ?>">
-					<?php esc_html_e( 'Settings', 'v4v-musiclink' ); ?>
+					<?php esc_html_e( 'Settings', 'v4v-musiclinker' ); ?>
 				</a>
 				<a href="<?php echo esc_url( admin_url( 'options-general.php?page=v4v-musiclink&tab=cache' ) ); ?>" class="nav-tab <?php echo 'cache' === $active_tab ? 'nav-tab-active' : ''; ?>">
-					<?php esc_html_e( 'Cache', 'v4v-musiclink' ); ?>
+					<?php esc_html_e( 'Cache', 'v4v-musiclinker' ); ?>
 				</a>
 			</h2>
 
@@ -460,32 +463,32 @@ class V4V_Music_Link_Resolver {
 				<table class="form-table" role="presentation">
 					<tr>
 						<th scope="row">
-							<?php esc_html_e( 'Release header', 'v4v-musiclink' ); ?>
+							<?php esc_html_e( 'Release header', 'v4v-musiclinker' ); ?>
 						</th>
 						<td>
 							<?php $show_header_value = get_option( 'v4v_musiclink_show_header', true ) ? '1' : '0'; ?>
 							<select id="v4v_musiclink_show_header" name="v4v_musiclink_show_header">
-								<option value="1" <?php selected( $show_header_value, '1' ); ?>><?php esc_html_e( 'Show', 'v4v-musiclink' ); ?></option>
-								<option value="0" <?php selected( $show_header_value, '0' ); ?>><?php esc_html_e( 'Hide', 'v4v-musiclink' ); ?></option>
+								<option value="1" <?php selected( $show_header_value, '1' ); ?>><?php esc_html_e( 'Show', 'v4v-musiclinker' ); ?></option>
+								<option value="0" <?php selected( $show_header_value, '0' ); ?>><?php esc_html_e( 'Hide', 'v4v-musiclinker' ); ?></option>
 							</select>
-							<label for="v4v_musiclink_show_header"><?php esc_html_e( ' the release title, artist and artwork above the music app buttons', 'v4v-musiclink' ); ?></label>
+							<label for="v4v_musiclink_show_header"><?php esc_html_e( ' the release title, artist and artwork above the music app buttons', 'v4v-musiclinker' ); ?></label>
 							<p class="description">
-								<?php esc_html_e( 'This is the site-wide default for every [musiclink] shortcode. It can be overridden per placement with the optional header attribute: header="false" hides the header for that instance, header="true" shows it, regardless of this setting.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'This is the site-wide default for every [v4v_musiclinker] shortcode. It can be overridden per placement with the optional header attribute: header="false" hides the header for that instance, header="true" shows it, regardless of this setting.', 'v4v-musiclinker' ); ?>
 							</p>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php esc_html_e( 'Music apps', 'v4v-musiclink' ); ?></th>
+						<th scope="row"><?php esc_html_e( 'Music apps', 'v4v-musiclinker' ); ?></th>
 						<td>
 						<table class="widefat" style="max-width:900px;">
 							<thead>
 								<tr>
-									<th style="width:100px;"><?php esc_html_e( 'Order', 'v4v-musiclink' ); ?></th>
-									<th style="width:60px;"><?php esc_html_e( 'Active', 'v4v-musiclink' ); ?></th>
-									<th><?php esc_html_e( 'App', 'v4v-musiclink' ); ?></th>
-									<th style="width:60px;"><?php esc_html_e( 'Icon', 'v4v-musiclink' ); ?></th>
-									<th><?php esc_html_e( 'Icon override URL', 'v4v-musiclink' ); ?></th>
-									<th style="width:120px;"><?php esc_html_e( 'Background', 'v4v-musiclink' ); ?></th>
+									<th style="width:100px;"><?php esc_html_e( 'Order', 'v4v-musiclinker' ); ?></th>
+									<th style="width:60px;"><?php esc_html_e( 'Active', 'v4v-musiclinker' ); ?></th>
+									<th><?php esc_html_e( 'App', 'v4v-musiclinker' ); ?></th>
+									<th style="width:60px;"><?php esc_html_e( 'Icon', 'v4v-musiclinker' ); ?></th>
+									<th><?php esc_html_e( 'Icon override URL', 'v4v-musiclinker' ); ?></th>
+									<th style="width:120px;"><?php esc_html_e( 'Background', 'v4v-musiclinker' ); ?></th>
 								</tr>
 							</thead>
 								<tbody>
@@ -507,8 +510,8 @@ class V4V_Music_Link_Resolver {
 													value="<?php echo esc_attr( $position ); ?>"
 												/>
 												<span class="v4v-app-order-position"><?php echo esc_html( $position + 1 ); ?></span>
-												<button type="button" class="button button-small v4v-app-move-up" title="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclink' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclink' ), $app['label'] ) ); ?>">&#8593;</button>
-												<button type="button" class="button button-small v4v-app-move-down" title="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclink' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclink' ), $app['label'] ) ); ?>">&#8595;</button>
+												<button type="button" class="button button-small v4v-app-move-up" title="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclinker' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s up', 'v4v-musiclinker' ), $app['label'] ) ); ?>">&#8593;</button>
+												<button type="button" class="button button-small v4v-app-move-down" title="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclinker' ), $app['label'] ) ); ?>" aria-label="<?php echo esc_attr( sprintf( __( 'Move %s down', 'v4v-musiclinker' ), $app['label'] ) ); ?>">&#8595;</button>
 											</td>
 											<td>
 												<input
@@ -535,11 +538,11 @@ class V4V_Music_Link_Resolver {
 													class="v4v-app-icon-input regular-text"
 													name="<?php echo esc_attr( $field_name ); ?>[icon_url]"
 													value="<?php echo esc_attr( $config['icon_url'] ); ?>"
-													placeholder="<?php esc_attr_e( 'Leave blank to use the default favicon', 'v4v-musiclink' ); ?>"
+													placeholder="<?php esc_attr_e( 'Leave blank to use the default favicon', 'v4v-musiclinker' ); ?>"
 													data-default-icon="<?php echo esc_url( $default_icon ); ?>"
 												/>
-												<button type="button" class="button v4v-app-icon-set"><?php esc_html_e( 'Set', 'v4v-musiclink' ); ?></button>
-												<span class="v4v-app-icon-warning" style="color:#a00; display:none;"><?php esc_html_e( 'Image could not be loaded from that URL.', 'v4v-musiclink' ); ?></span>
+												<button type="button" class="button v4v-app-icon-set"><?php esc_html_e( 'Set', 'v4v-musiclinker' ); ?></button>
+												<span class="v4v-app-icon-warning" style="color:#a00; display:none;"><?php esc_html_e( 'Image could not be loaded from that URL.', 'v4v-musiclinker' ); ?></span>
 											</td>
 											<td>
 												<label style="display:block; margin-bottom:4px;">
@@ -550,14 +553,14 @@ class V4V_Music_Link_Resolver {
 														value="1"
 														<?php checked( '' === $icon_bg ); ?>
 													/>
-													<?php esc_html_e( 'None (transparent)', 'v4v-musiclink' ); ?>
+													<?php esc_html_e( 'None (transparent)', 'v4v-musiclinker' ); ?>
 												</label>
 												<input
 													type="color"
 													class="v4v-app-bg-color"
 													name="<?php echo esc_attr( $field_name ); ?>[icon_bg]"
 													value="<?php echo esc_attr( '' !== $icon_bg ? $icon_bg : '#ffffff' ); ?>"
-													title="<?php esc_attr_e( 'Icon background colour', 'v4v-musiclink' ); ?>"
+													title="<?php esc_attr_e( 'Icon background colour', 'v4v-musiclinker' ); ?>"
 												/>
 											</td>
 										</tr>
@@ -566,7 +569,7 @@ class V4V_Music_Link_Resolver {
 								</tbody>
 							</table>
 							<p class="description">
-								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [musiclink] shortcode is used. Use the arrows in the "Order" column to set the order the buttons appear in on the front end, then click "Save Changes" below to apply it. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below. In the "Background" column, pick a colour to sit behind the icon (useful for transparent PNGs) or tick "None (transparent)" to keep today\'s look - the 32px preview updates immediately; a saved colour is applied to the icon itself on the front end.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'Unchecking "Active" hides that app\'s button entirely wherever the [v4v_musiclinker] shortcode is used. Use the arrows in the "Order" column to set the order the buttons appear in on the front end, then click "Save Changes" below to apply it. Click "Set" to preview an icon override before saving - the preview updates immediately, but nothing is saved until you click "Save Changes" below. In the "Background" column, pick a colour to sit behind the icon (useful for transparent PNGs) or tick "None (transparent)" to keep today\'s look - the 32px preview updates immediately; a saved colour is applied to the icon itself on the front end.', 'v4v-musiclinker' ); ?>
 							</p>
 							<script>
 							(function () {
@@ -654,7 +657,7 @@ class V4V_Music_Link_Resolver {
 					</tr>
 					<tr>
 						<th scope="row">
-							<label for="v4v_musiclink_random_app_order"><?php esc_html_e( 'Random order', 'v4v-musiclink' ); ?></label>
+							<label for="v4v_musiclink_random_app_order"><?php esc_html_e( 'Random order', 'v4v-musiclinker' ); ?></label>
 						</th>
 						<td>
 							<input type="hidden" name="v4v_musiclink_random_app_order" value="0" />
@@ -666,16 +669,16 @@ class V4V_Music_Link_Resolver {
 								<?php checked( get_option( 'v4v_musiclink_random_app_order', false ) ); ?>
 							/>
 							<label for="v4v_musiclink_random_app_order">
-								<?php esc_html_e( 'Shuffle the music app buttons into a new random order on every page load', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'Shuffle the music app buttons into a new random order on every page load', 'v4v-musiclinker' ); ?>
 							</label>
 							<p class="description">
-								<?php esc_html_e( 'The "Order" column above is never changed by this: it stays the fixed order shown in the table, and is used whenever this box is unticked. When ticked, every load of a page containing the shortcode - including refreshes, and pages served from a cache - shows the buttons in a fresh random order. Without JavaScript the configured order is shown. The same randomisation applies to every visitor.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'The "Order" column above is never changed by this: it stays the fixed order shown in the table, and is used whenever this box is unticked. When ticked, every load of a page containing the shortcode - including refreshes, and pages served from a cache - shows the buttons in a fresh random order. Without JavaScript the configured order is shown. The same randomisation applies to every visitor.', 'v4v-musiclinker' ); ?>
 							</p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row">
-							<label for="v4v_musiclink_mi_refresh_hours"><?php esc_html_e( 'Music Index refresh', 'v4v-musiclink' ); ?></label>
+							<label for="v4v_musiclink_mi_refresh_hours"><?php esc_html_e( 'Music Index refresh', 'v4v-musiclinker' ); ?></label>
 						</th>
 						<td>
 							<input
@@ -688,15 +691,15 @@ class V4V_Music_Link_Resolver {
 								step="1"
 								class="small-text"
 							/>
-							<?php esc_html_e( 'hours', 'v4v-musiclink' ); ?>
+							<?php esc_html_e( 'hours', 'v4v-musiclinker' ); ?>
 							<p class="description">
-								<?php esc_html_e( 'When a background refresh of cached Music Index metadata (titles, artist, artwork) is triggered. Cached data keeps serving at any age and is never cleared by this value - lower means fresher metadata, higher means fewer Music Index requests. Default: 12 hours. This does not affect failure throttles, stored Fountain.fm links, or the release header.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'When a background refresh of cached Music Index metadata (titles, artist, artwork) is triggered. Cached data keeps serving at any age and is never cleared by this value - lower means fresher metadata, higher means fewer Music Index requests. Default: 12 hours. This does not affect failure throttles, stored Fountain.fm links, or the release header.', 'v4v-musiclinker' ); ?>
 							</p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row">
-							<label for="v4v_musiclink_show_credits"><?php esc_html_e( 'Credit links', 'v4v-musiclink' ); ?></label>
+							<label for="v4v_musiclink_show_credits"><?php esc_html_e( 'Credit links', 'v4v-musiclinker' ); ?></label>
 						</th>
 						<td>
 							<input type="hidden" name="v4v_musiclink_show_credits" value="0" />
@@ -708,10 +711,10 @@ class V4V_Music_Link_Resolver {
 								<?php checked( get_option( 'v4v_musiclink_show_credits', false ) ); ?>
 							/>
 							<label for="v4v_musiclink_show_credits">
-								<?php esc_html_e( 'Show a credit line under the buttons linking to V4V MusicLink (phafe.com) and MusicIndex.org', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'Show a credit line under the buttons linking to V4V MusicLinker (phafe.com) and MusicIndex.org', 'v4v-musiclinker' ); ?>
 							</label>
 							<p class="description">
-								<?php esc_html_e( 'Off by default. When off, nothing linking back to this plugin\'s site or MusicIndex.org is printed on your public pages - tick this box only if you are happy to display those two credit links to your visitors.', 'v4v-musiclink' ); ?>
+								<?php esc_html_e( 'Off by default. When off, nothing linking back to this plugin\'s site or MusicIndex.org is printed on your public pages - tick this box only if you are happy to display those two credit links to your visitors.', 'v4v-musiclinker' ); ?>
 							</p>
 						</td>
 					</tr>
@@ -915,14 +918,14 @@ class V4V_Music_Link_Resolver {
 			// Display order: the release, then its link, then when it was
 			// last written - the table follows the same order. The art
 			// URL and the two timestamps are deliberately not filterable.
-			'artist'       => __( 'Artist', 'v4v-musiclink' ),
-			'album_title'  => __( 'Album title', 'v4v-musiclink' ),
-			'track_title'  => __( 'Track title', 'v4v-musiclink' ),
-			'album_guid'   => __( 'Album GUID', 'v4v-musiclink' ),
-			'track_guid'   => __( 'Track GUID', 'v4v-musiclink' ),
+			'artist'       => __( 'Artist', 'v4v-musiclinker' ),
+			'album_title'  => __( 'Album title', 'v4v-musiclinker' ),
+			'track_title'  => __( 'Track title', 'v4v-musiclinker' ),
+			'album_guid'   => __( 'Album GUID', 'v4v-musiclinker' ),
+			'track_guid'   => __( 'Track GUID', 'v4v-musiclinker' ),
 			// One key per app link column (LINK_COLUMNS), labelled for
 			// the app that owns one today.
-			'fountain_url' => __( 'Fountain.fm link', 'v4v-musiclink' ),
+			'fountain_url' => __( 'Fountain.fm link', 'v4v-musiclinker' ),
 		);
 	}
 
@@ -1034,7 +1037,7 @@ class V4V_Music_Link_Resolver {
 			<?php // Per-app clear: the link column was blanked, the rows stay. ?>
 			<div class="notice notice-success is-dismissible">
 				<p><?php printf(
-					esc_html__( '%1$s link cleared on %2$s row(s).', 'v4v-musiclink' ),
+					esc_html__( '%1$s link cleared on %2$s row(s).', 'v4v-musiclinker' ),
 					esc_html( $this->app_display_label( sanitize_text_field( wp_unslash( $_GET['sl_cleared_app'] ) ) ) ),
 					esc_html( sanitize_text_field( wp_unslash( $_GET['sl_links_cleared'] ) ) )
 				); ?></p>
@@ -1042,32 +1045,32 @@ class V4V_Music_Link_Resolver {
 		<?php elseif ( isset( $_GET['sl_cleared'] ) ) : ?>
 			<?php // Clear all: the rows themselves are gone. ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php printf( esc_html__( '%s cache row(s) removed.', 'v4v-musiclink' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
+				<p><?php printf( esc_html__( '%s cache row(s) removed.', 'v4v-musiclinker' ), esc_html( sanitize_text_field( wp_unslash( $_GET['sl_cleared'] ) ) ) ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_saved'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php esc_html_e( 'Fountain.fm link updated.', 'v4v-musiclink' ); ?></p>
+				<p><?php esc_html_e( 'Fountain.fm link updated.', 'v4v-musiclinker' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_art_saved'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php esc_html_e( 'Artwork URL updated.', 'v4v-musiclink' ); ?></p>
+				<p><?php esc_html_e( 'Artwork URL updated.', 'v4v-musiclinker' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_deleted'] ) ) : ?>
 			<div class="notice notice-success is-dismissible">
-				<p><?php esc_html_e( 'Cache row removed. It will be created again if the release is viewed again.', 'v4v-musiclink' ); ?></p>
+				<p><?php esc_html_e( 'Cache row removed. It will be created again if the release is viewed again.', 'v4v-musiclinker' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_error'] ) ) : ?>
 			<div class="notice notice-error is-dismissible">
-				<p><?php esc_html_e( 'That link was not saved: it must be an https URL on this app\'s own domain.', 'v4v-musiclink' ); ?></p>
+				<p><?php esc_html_e( 'That link was not saved: it must be an https URL on this app\'s own domain.', 'v4v-musiclinker' ); ?></p>
 			</div>
 		<?php elseif ( isset( $_GET['sl_art_error'] ) ) : ?>
 			<div class="notice notice-error is-dismissible">
-				<p><?php esc_html_e( 'That artwork URL was not saved: it must be an http(s) URL, or blank to remove the artwork.', 'v4v-musiclink' ); ?></p>
+				<p><?php esc_html_e( 'That artwork URL was not saved: it must be an http(s) URL, or blank to remove the artwork.', 'v4v-musiclinker' ); ?></p>
 			</div>
 		<?php endif; ?>
 
 		<p class="description">
-			<?php esc_html_e( 'One row per release: cached Music Index metadata (titles, artist, artwork) plus the resolved Fountain.fm link. Artwork and the Fountain.fm link are edited here per row; titles and artist refresh in the background on the interval set under Settings ("Music Index refresh") while stale rows keep serving.', 'v4v-musiclink' ); ?>
+			<?php esc_html_e( 'One row per release: cached Music Index metadata (titles, artist, artwork) plus the resolved Fountain.fm link. Artwork and the Fountain.fm link are edited here per row; titles and artist refresh in the background on the interval set under Settings ("Music Index refresh") while stale rows keep serving.', 'v4v-musiclinker' ); ?>
 		</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>" style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin:1em 0;">
@@ -1079,27 +1082,27 @@ class V4V_Music_Link_Resolver {
 					<input type="text" name="sl_<?php echo esc_attr( $field ); ?>" value="<?php echo esc_attr( $filters[ $field ] ); ?>" style="width:100%;" />
 				</label>
 			<?php endforeach; ?>
-			<button type="submit" class="button button-primary"><?php esc_html_e( 'Filter', 'v4v-musiclink' ); ?></button>
-			<a class="button" href="<?php echo esc_url( $plain_tab_url ); ?>"><?php esc_html_e( 'Clear filters', 'v4v-musiclink' ); ?></a>
+			<button type="submit" class="button button-primary"><?php esc_html_e( 'Filter', 'v4v-musiclinker' ); ?></button>
+			<a class="button" href="<?php echo esc_url( $plain_tab_url ); ?>"><?php esc_html_e( 'Clear filters', 'v4v-musiclinker' ); ?></a>
 		</form>
 
 		<?php if ( $total > 0 ) : ?>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="var label = this.scope.options[ this.scope.selectedIndex ].text; return confirm( 'all' === this.scope.value ? '<?php echo esc_js( __( 'Clear all cached rows? Every row is removed - hand-edited links included - and each release re-resolves when it is viewed again.', 'v4v-musiclink' ) ); ?>' : label + ' <?php echo esc_js( __( 'The rows stay, but those links are blanked and re-resolve when their releases are viewed again.', 'v4v-musiclink' ) ); ?>' );">
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 1em;" onsubmit="var label = this.scope.options[ this.scope.selectedIndex ].text; return confirm( 'all' === this.scope.value ? '<?php echo esc_js( __( 'Clear all cached rows? Every row is removed - hand-edited links included - and each release re-resolves when it is viewed again.', 'v4v-musiclinker' ) ); ?>' : label + ' <?php echo esc_js( __( 'The rows stay, but those links are blanked and re-resolve when their releases are viewed again.', 'v4v-musiclinker' ) ); ?>' );">
 				<input type="hidden" name="action" value="v4v_musiclink_clear_cache" />
 				<?php wp_nonce_field( 'v4v_musiclink_clear_cache' ); ?>
-				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear cache:', 'v4v-musiclink' ); ?></label>
+				<label for="v4v-sl-clear-scope"><?php esc_html_e( 'Clear cache:', 'v4v-musiclinker' ); ?></label>
 				<select name="scope" id="v4v-sl-clear-scope">
-					<option value="all"><?php esc_html_e( 'Clear all cached rows', 'v4v-musiclink' ); ?></option>
+					<option value="all"><?php esc_html_e( 'Clear all cached rows', 'v4v-musiclinker' ); ?></option>
 					<?php foreach ( $link_apps as $app_slug ) : ?>
-						<option value="<?php echo esc_attr( $app_slug ); ?>"><?php printf( esc_html__( 'Clear %s links', 'v4v-musiclink' ), esc_html( $this->app_display_label( $app_slug ) ) ); ?></option>
+						<option value="<?php echo esc_attr( $app_slug ); ?>"><?php printf( esc_html__( 'Clear %s links', 'v4v-musiclinker' ), esc_html( $this->app_display_label( $app_slug ) ) ); ?></option>
 					<?php endforeach; ?>
 				</select>
-				<button type="submit" class="button"><?php esc_html_e( 'Clear', 'v4v-musiclink' ); ?></button>
+				<button type="submit" class="button"><?php esc_html_e( 'Clear', 'v4v-musiclinker' ); ?></button>
 			</form>
 		<?php endif; ?>
 
 		<p>
-			<?php printf( esc_html__( '%s cached row(s).', 'v4v-musiclink' ), esc_html( number_format_i18n( $total ) ) ); ?>
+			<?php printf( esc_html__( '%s cached row(s).', 'v4v-musiclinker' ), esc_html( number_format_i18n( $total ) ) ); ?>
 			<?php if ( $pages > 1 ) : ?>
 				<?php if ( $paged > 1 ) : ?>
 					<a class="button button-small" href="<?php echo esc_url( $this->cache_admin_url( array( 'sl_paged' => $paged - 1 ) ) ); ?>">&laquo;</a>
@@ -1114,21 +1117,21 @@ class V4V_Music_Link_Resolver {
 		<table class="widefat striped">
 			<thead>
 				<tr>
-					<th><?php esc_html_e( 'Metadata Updated', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Artist', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Album title', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Track title', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Album GUID', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Art', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink' ); ?></th>
-					<th><?php esc_html_e( 'Fountain updated', 'v4v-musiclink' ); ?></th>
-					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclink' ); ?></span></th>
+					<th><?php esc_html_e( 'Metadata Updated', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Artist', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Album title', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Track title', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Album GUID', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Track GUID', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Art', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclinker' ); ?></th>
+					<th><?php esc_html_e( 'Fountain updated', 'v4v-musiclinker' ); ?></th>
+					<th><span class="screen-reader-text"><?php esc_html_e( 'Actions', 'v4v-musiclinker' ); ?></span></th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
-					<tr><td colspan="10"><?php esc_html_e( 'No cached rows match.', 'v4v-musiclink' ); ?></td></tr>
+					<tr><td colspan="10"><?php esc_html_e( 'No cached rows match.', 'v4v-musiclinker' ); ?></td></tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<?php $art_label = trim( $row->artist . ' - ' . ( $row->album_title ? $row->album_title : (string) $row->track_title ) ); ?>
@@ -1147,23 +1150,23 @@ class V4V_Music_Link_Resolver {
 									data-id="<?php echo (int) $row->id; ?>"
 									data-url="<?php echo esc_attr( (string) $row->image_url ); ?>"
 									data-label="<?php echo esc_attr( $art_label ); ?>"
-									title="<?php echo esc_attr( $row->image_url ? __( 'Edit artwork URL', 'v4v-musiclink' ) : __( 'Add an artwork URL', 'v4v-musiclink' ) ); ?>">
+									title="<?php echo esc_attr( $row->image_url ? __( 'Edit artwork URL', 'v4v-musiclinker' ) : __( 'Add an artwork URL', 'v4v-musiclinker' ) ); ?>">
 									<?php if ( $row->image_url ) : ?>
 										<span style="color:#00a32a; font-size:16px; line-height:1;" aria-hidden="true">&#10003;</span>
-										<span class="screen-reader-text"><?php esc_html_e( 'Artwork URL stored - edit it', 'v4v-musiclink' ); ?></span>
+										<span class="screen-reader-text"><?php esc_html_e( 'Artwork URL stored - edit it', 'v4v-musiclinker' ); ?></span>
 									<?php else : ?>
 										<span style="color:#d63638; font-size:16px; line-height:1;" aria-hidden="true">&#10007;</span>
-										<span class="screen-reader-text"><?php esc_html_e( 'No artwork URL stored - add one', 'v4v-musiclink' ); ?></span>
+										<span class="screen-reader-text"><?php esc_html_e( 'No artwork URL stored - add one', 'v4v-musiclinker' ); ?></span>
 									<?php endif; ?>
 								</button>
 							</td>
 							<td style="white-space:nowrap;">
-								<button type="button" class="button button-small v4v-sl-edit-toggle" data-id="<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Edit', 'v4v-musiclink' ); ?></button>
+								<button type="button" class="button button-small v4v-sl-edit-toggle" data-id="<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Edit', 'v4v-musiclinker' ); ?></button>
 								<?php if ( $row->fountain_url ) : ?>
-									<a class="button button-small" href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Launch', 'v4v-musiclink' ); ?></a>
+									<a class="button button-small" href="<?php echo esc_url( $row->fountain_url ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Launch', 'v4v-musiclinker' ); ?></a>
 								<?php else : ?>
 									<span style="color:#d63638; font-size:16px; line-height:1;" aria-hidden="true">&#10007;</span>
-									<span class="screen-reader-text"><?php esc_html_e( 'No Fountain.fm link stored', 'v4v-musiclink' ); ?></span>
+									<span class="screen-reader-text"><?php esc_html_e( 'No Fountain.fm link stored', 'v4v-musiclinker' ); ?></span>
 								<?php endif; ?>
 							</td>
 							<td><?php echo esc_html( substr( (string) $row->fountain_updated_at, 0, 10 ) ); ?></td>
@@ -1172,7 +1175,7 @@ class V4V_Music_Link_Resolver {
 									<input type="hidden" name="action" value="v4v_musiclink_delete_cache_row" />
 									<input type="hidden" name="link_id" value="<?php echo (int) $row->id; ?>" />
 									<?php wp_nonce_field( 'v4v_musiclink_delete_cache_row' ); ?>
-									<button type="submit" class="button button-small" onclick="return confirm('<?php echo esc_js( __( 'Remove this cached row? The release re-resolves the next time it is viewed.', 'v4v-musiclink' ) ); ?>');"><?php esc_html_e( 'Remove', 'v4v-musiclink' ); ?></button>
+									<button type="submit" class="button button-small" onclick="return confirm('<?php echo esc_js( __( 'Remove this cached row? The release re-resolves the next time it is viewed.', 'v4v-musiclinker' ) ); ?>');"><?php esc_html_e( 'Remove', 'v4v-musiclinker' ); ?></button>
 								</form>
 							</td>
 						</tr>
@@ -1184,10 +1187,10 @@ class V4V_Music_Link_Resolver {
 									<?php // Which column is being edited; whitelisted against CACHE_EDIT_COLUMNS. ?>
 									<input type="hidden" name="link_field" value="fountain" />
 									<?php wp_nonce_field( 'v4v_musiclink_update_cache_row' ); ?>
-									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclink' ); ?></label>
+									<label for="v4v-sl-url-<?php echo (int) $row->id; ?>"><?php esc_html_e( 'Fountain.fm link', 'v4v-musiclinker' ); ?></label>
 									<input type="url" class="regular-text code" id="v4v-sl-url-<?php echo (int) $row->id; ?>" name="url" value="<?php echo esc_attr( $row->fountain_url ); ?>" style="flex:1 1 320px;" />
-									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclink' ); ?></button>
-									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again. Titles and artist are read-only - the next refresh overwrites them.', 'v4v-musiclink' ); ?></span>
+									<button type="submit" class="button button-primary"><?php esc_html_e( 'Save', 'v4v-musiclinker' ); ?></button>
+									<span class="description"><?php esc_html_e( 'Leave blank to clear it: the next page view re-runs the Fountain search and stores the result again. Titles and artist are read-only - the next refresh overwrites them.', 'v4v-musiclinker' ); ?></span>
 								</form>
 							</td>
 						</tr>
@@ -1211,12 +1214,12 @@ class V4V_Music_Link_Resolver {
 					<input type="hidden" name="link_id" id="v4v-sl-art-id" value="" />
 					<input type="hidden" name="link_field" value="art" />
 					<?php wp_nonce_field( 'v4v_musiclink_update_cache_row' ); ?>
-					<label for="v4v-sl-art-url"><?php esc_html_e( 'Artwork URL', 'v4v-musiclink' ); ?></label>
+					<label for="v4v-sl-art-url"><?php esc_html_e( 'Artwork URL', 'v4v-musiclinker' ); ?></label>
 					<input type="url" class="regular-text code" id="v4v-sl-art-url" name="url" value="" style="width:100%; box-sizing:border-box;" />
-					<p class="description"><?php esc_html_e( 'Leave blank to remove the artwork. The next Music Index refresh fills it in again unless the row is still within its refresh interval.', 'v4v-musiclink' ); ?></p>
+					<p class="description"><?php esc_html_e( 'Leave blank to remove the artwork. The next Music Index refresh fills it in again unless the row is still within its refresh interval.', 'v4v-musiclinker' ); ?></p>
 					<p style="margin-bottom:0; display:flex; gap:8px;">
-						<button type="submit" class="button button-primary"><?php esc_html_e( 'Update', 'v4v-musiclink' ); ?></button>
-						<button type="button" class="button v4v-sl-art-close"><?php esc_html_e( 'Cancel', 'v4v-musiclink' ); ?></button>
+						<button type="submit" class="button button-primary"><?php esc_html_e( 'Update', 'v4v-musiclinker' ); ?></button>
+						<button type="button" class="button v4v-sl-art-close"><?php esc_html_e( 'Cancel', 'v4v-musiclinker' ); ?></button>
 					</p>
 				</form>
 			</div>
@@ -1272,7 +1275,7 @@ class V4V_Music_Link_Resolver {
 		check_admin_referer( 'v4v_musiclink_update_cache_row' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to edit cache rows.', 'v4v-musiclink' ) );
+			wp_die( esc_html__( 'You are not allowed to edit cache rows.', 'v4v-musiclinker' ) );
 		}
 
 		global $wpdb;
@@ -1330,7 +1333,7 @@ class V4V_Music_Link_Resolver {
 		check_admin_referer( 'v4v_musiclink_delete_cache_row' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to remove cache rows.', 'v4v-musiclink' ) );
+			wp_die( esc_html__( 'You are not allowed to remove cache rows.', 'v4v-musiclinker' ) );
 		}
 
 		$id = isset( $_POST['link_id'] ) ? (int) $_POST['link_id'] : 0;
@@ -1355,7 +1358,7 @@ class V4V_Music_Link_Resolver {
 		check_admin_referer( 'v4v_musiclink_clear_cache' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You are not allowed to clear the cache.', 'v4v-musiclink' ) );
+			wp_die( esc_html__( 'You are not allowed to clear the cache.', 'v4v-musiclinker' ) );
 		}
 
 		global $wpdb;
@@ -1395,7 +1398,7 @@ class V4V_Music_Link_Resolver {
 		wp_enqueue_style( 'v4v-musiclink' );
 		wp_add_inline_style( 'v4v-musiclink', $this->inline_css() );
 
-		wp_register_script( 'v4v-musiclink', false, array(), '1.22.31', true );
+		wp_register_script( 'v4v-musiclink', false, array(), '1.0.0', true );
 		wp_enqueue_script( 'v4v-musiclink' );
 		wp_add_inline_script( 'v4v-musiclink', $this->inline_js() );
 	}
@@ -1473,7 +1476,7 @@ class V4V_Music_Link_Resolver {
 	 * stays both build-free and interpolation-free.
 	 *
 	 * Attributes mirror the shortcode's whitelist exactly (album, track,
-	 * header): save() emits the raw [musiclink ...] string as the block's
+	 * header): save() emits the raw [v4v_musiclinker ...] string as the block's
 	 * content, so the front end runs the same single shortcode path it
 	 * always has. The Fountain link is NOT an attribute - it reads and
 	 * writes the cache row through the REST routes, which is why there is
@@ -1527,11 +1530,11 @@ class V4V_Music_Link_Resolver {
 		if ( 'true' === header || 'false' === header ) {
 			parts.push( 'header="' + header + '"' );
 		}
-		return '[musiclink ' + parts.join( ' ' ) + ']';
+		return '[v4v_musiclinker ' + parts.join( ' ' ) + ']';
 	}
 
 	function error_message( err ) {
-		return ( err && err.message ) ? err.message : __( 'Request failed.', 'v4v-musiclink' );
+		return ( err && err.message ) ? err.message : __( 'Request failed.', 'v4v-musiclinker' );
 	}
 
 	// On-demand search (O23): collapsed, the panel is a single [Search]
@@ -1635,7 +1638,7 @@ class V4V_Music_Link_Resolver {
 
 		if ( ! open ) {
 			return el( Button, { className: 'v4v-ml-search-open', onClick: function () { setOpen( true ); } },
-				__( 'Search', 'v4v-musiclink' )
+				__( 'Search', 'v4v-musiclinker' )
 			);
 		}
 
@@ -1644,8 +1647,8 @@ class V4V_Music_Link_Resolver {
 				el( 'input', {
 					type: 'text',
 					className: 'components-text-control__input',
-					'aria-label': __( 'Search by title', 'v4v-musiclink' ),
-					placeholder: __( 'Song or album title...', 'v4v-musiclink' ),
+					'aria-label': __( 'Search by title', 'v4v-musiclinker' ),
+					placeholder: __( 'Song or album title...', 'v4v-musiclinker' ),
 					value: query,
 					ref: inputRef,
 					onChange: function ( e ) { setQuery( e.target.value ); },
@@ -1660,10 +1663,10 @@ class V4V_Music_Link_Resolver {
 					}
 				} ),
 				el( Button, { className: 'v4v-ml-search-submit', onClick: submit, disabled: loading },
-					__( 'Search', 'v4v-musiclink' )
+					__( 'Search', 'v4v-musiclinker' )
 				),
 				el( Button, { className: 'v4v-ml-search-cancel', onClick: close },
-					__( 'Close', 'v4v-musiclink' )
+					__( 'Close', 'v4v-musiclinker' )
 				)
 			),
 			error ? el( Notice, { status: 'error', isDismissible: false }, error ) : null,
@@ -1680,7 +1683,7 @@ class V4V_Music_Link_Resolver {
 			),
 			has_more && ! loading
 				? el( Button, { onClick: function () { do_search( query.trim(), page + 1, true ); } },
-					__( 'Load more', 'v4v-musiclink' ) )
+					__( 'Load more', 'v4v-musiclinker' ) )
 				: null
 		);
 	}
@@ -1745,10 +1748,10 @@ class V4V_Music_Link_Resolver {
 
 		return el( Fragment, null,
 			el( TextControl, {
-				label: __( 'Fountain.fm link', 'v4v-musiclink' ),
+				label: __( 'Fountain.fm link', 'v4v-musiclinker' ),
 				help: __(
 					'Stored in this release\'s cache row (the same field as the Cache tab\'s "Fountain.fm link"), so it is shared by every shortcode of this release. Leave empty to render the search fallback.',
-					'v4v-musiclink'
+					'v4v-musiclinker'
 				),
 				value: value,
 				placeholder: 'https://fountain.fm/...',
@@ -1758,13 +1761,13 @@ class V4V_Music_Link_Resolver {
 			} ),
 			'saving' === status ? el( Spinner ) : null,
 			'saved' === status
-				? el( 'p', { className: 'v4v-ml-saved' }, __( 'Saved to the cache row.', 'v4v-musiclink' ) )
+				? el( 'p', { className: 'v4v-ml-saved' }, __( 'Saved to the cache row.', 'v4v-musiclinker' ) )
 				: null,
 			error ? el( Notice, { status: 'error', isDismissible: false }, error ) : null,
 			! album
 				? el( 'p', { className: 'v4v-ml-hint' }, __(
 					'Pick a search result or enter GUIDs first - the link lives on the cache row for that release.',
-					'v4v-musiclink'
+					'v4v-musiclinker'
 				) )
 				: null
 		);
@@ -1822,39 +1825,39 @@ class V4V_Music_Link_Resolver {
 		if ( ! album ) {
 			return el( 'p', { className: 'v4v-ml-hint' }, __(
 				'No release selected yet.',
-				'v4v-musiclink'
+				'v4v-musiclinker'
 			) );
 		}
 		if ( error ) {
 			return el( 'p', { className: 'v4v-ml-error' }, __(
 				'Could not load release details: ',
-				'v4v-musiclink'
+				'v4v-musiclinker'
 			) + error );
 		}
 		if ( ! info ) {
 			return el( 'p', { className: 'v4v-ml-hint' }, __(
 				'Loading…',
-				'v4v-musiclink'
+				'v4v-musiclinker'
 			) );
 		}
 		return el( Fragment, null,
-			row( __( 'Album: ', 'v4v-musiclink' ), info.album_title ),
-			row( __( 'Track: ', 'v4v-musiclink' ), info.track_title ),
-			row( __( 'Artist: ', 'v4v-musiclink' ), info.artist ),
+			row( __( 'Album: ', 'v4v-musiclinker' ), info.album_title ),
+			row( __( 'Track: ', 'v4v-musiclinker' ), info.track_title ),
+			row( __( 'Artist: ', 'v4v-musiclinker' ), info.artist ),
 			false === info.has_row
 				? el( 'p', { className: 'v4v-ml-hint' }, __(
 					'Not cached yet - the text fills in once the release has been rendered or searched.',
-					'v4v-musiclink'
+					'v4v-musiclinker'
 				) )
 				: null
 		);
 	}
 
 	blocks.registerBlockType( 'v4v-musiclink/musiclink', {
-		title: __( 'Music Link', 'v4v-musiclink' ),
+		title: __( 'Music Link', 'v4v-musiclinker' ),
 		description: __(
-			'Insert a [musiclink] shortcode; search Music Index and edit every value from this block\'s settings pane.',
-			'v4v-musiclink'
+			'Insert a [v4v_musiclinker] shortcode; search Music Index and edit every value from this block\'s settings pane.',
+			'v4v-musiclinker'
 		),
 		icon: 'format-audio',
 		category: 'widgets',
@@ -1922,7 +1925,7 @@ class V4V_Music_Link_Resolver {
 			if ( ! album ) {
 				canvas = el( 'p', { className: 'v4v-ml-hint' }, __(
 					'Search by title in the settings pane, or paste the release GUIDs.',
-					'v4v-musiclink'
+					'v4v-musiclinker'
 				) );
 			} else if ( html ) {
 				canvas = el( Fragment, null,
@@ -1932,7 +1935,7 @@ class V4V_Music_Link_Resolver {
 					previewError
 						? el( 'p', { className: 'v4v-ml-error' }, __(
 							'Preview refresh failed: ',
-							'v4v-musiclink'
+							'v4v-musiclinker'
 						) + previewError )
 						: null
 				);
@@ -1940,63 +1943,63 @@ class V4V_Music_Link_Resolver {
 				canvas = el( Fragment, null,
 					el( 'p', { className: 'v4v-ml-error' }, __(
 						'Preview failed: ',
-						'v4v-musiclink'
+						'v4v-musiclinker'
 					) + previewError ),
 					shortcode ? el( 'code', null, shortcode ) : null
 				);
 			} else {
 				canvas = el( 'p', { className: 'v4v-ml-hint' }, __(
 					'Rendering preview…',
-					'v4v-musiclink'
+					'v4v-musiclinker'
 				) );
 			}
 
 			return el( Fragment, null,
 				el( InspectorControls, null,
-					el( PanelBody, { title: __( 'Search Music Index', 'v4v-musiclink' ), initialOpen: true },
+					el( PanelBody, { title: __( 'Search Music Index', 'v4v-musiclinker' ), initialOpen: true },
 						el( SearchPanel, {
 							attributes: props.attributes,
 							setAttributes: props.setAttributes
 						} )
 					),
-					el( PanelBody, { title: __( 'Release details', 'v4v-musiclink' ), initialOpen: true },
+					el( PanelBody, { title: __( 'Release details', 'v4v-musiclinker' ), initialOpen: true },
 						el( ReleaseDetails, {
 							album: props.attributes.album,
 							track: props.attributes.track
 						} )
 					),
-					el( PanelBody, { title: __( 'Fountain.fm link', 'v4v-musiclink' ), initialOpen: true },
+					el( PanelBody, { title: __( 'Fountain.fm link', 'v4v-musiclinker' ), initialOpen: true },
 						el( FountainPanel, {
 							album: props.attributes.album,
 							track: props.attributes.track
 						} )
 					),
-					el( PanelBody, { title: __( 'Release header', 'v4v-musiclink' ), initialOpen: false },
+					el( PanelBody, { title: __( 'Release header', 'v4v-musiclinker' ), initialOpen: false },
 						el( SelectControl, {
-							label: __( 'Header', 'v4v-musiclink' ),
+							label: __( 'Header', 'v4v-musiclinker' ),
 							value: props.attributes.header,
 							options: [
-								{ label: __( 'Site setting', 'v4v-musiclink' ), value: 'site' },
-								{ label: __( 'Always Show', 'v4v-musiclink' ), value: 'true' },
-								{ label: __( 'Always Hide', 'v4v-musiclink' ), value: 'false' }
+								{ label: __( 'Site setting', 'v4v-musiclinker' ), value: 'site' },
+								{ label: __( 'Always Show', 'v4v-musiclinker' ), value: 'true' },
+								{ label: __( 'Always Hide', 'v4v-musiclinker' ), value: 'false' }
 							],
 							onChange: function ( next ) { props.setAttributes( { header: next } ); }
 						} ),
 						el( 'p', { className: 'v4v-ml-hint' }, __(
 							'Site setting omits the attribute and follows the plugin\'s Release header setting.',
-							'v4v-musiclink'
+							'v4v-musiclinker'
 						) )
 					),
-					el( PanelBody, { title: __( 'Release GUIDs', 'v4v-musiclink' ), initialOpen: false },
+					el( PanelBody, { title: __( 'Release GUIDs', 'v4v-musiclinker' ), initialOpen: false },
 						el( TextControl, {
-							label: __( 'Album GUID', 'v4v-musiclink' ),
+							label: __( 'Album GUID', 'v4v-musiclinker' ),
 							value: props.attributes.album,
 							onChange: function ( next ) { props.setAttributes( { album: clean_value( next ) } ); }
 						} ),
 						el( TextControl, {
-							label: __( 'Track GUID', 'v4v-musiclink' ),
+							label: __( 'Track GUID', 'v4v-musiclinker' ),
 							value: props.attributes.track,
-							help: __( 'Optional for album-only links; each value is limited to 256 bytes.', 'v4v-musiclink' ),
+							help: __( 'Optional for album-only links; each value is limited to 256 bytes.', 'v4v-musiclinker' ),
 							onChange: function ( next ) { props.setAttributes( { track: clean_value( next ) } ); }
 						} )
 					)
@@ -2233,11 +2236,11 @@ JS;
 			'album'  => '',
 			'track'  => '',
 			'header' => '',
-		), $raw_atts, 'musiclink' );
+		), $raw_atts, 'v4v_musiclinker' );
 
 		// An unexpected attribute name means we ignore ALL attributes and
-		// treat this exactly like a bare [musiclink] with nothing supplied,
-		// rather than guessing at which of the given attributes to trust.
+		// treat this exactly like a bare [v4v_musiclinker] with nothing
+		// supplied, rather than guessing at which attributes to trust.
 		$album = ( empty( $unexpected ) && $atts['album'] )
 			? $this->guard_guid( sanitize_text_field( $atts['album'] ) )
 			: '';
@@ -2266,7 +2269,7 @@ JS;
 		$feed_data   = $release['feed_data'];
 
 		if ( ! $album_title && ! $track_title ) {
-			return $this->render_missing_params_message( __( 'Album/Song not found', 'v4v-musiclink' ) );
+			return $this->render_missing_params_message( __( 'Album/Song not found', 'v4v-musiclinker' ) );
 		}
 
 		$links = array();
@@ -2387,23 +2390,23 @@ JS;
 	 * given guid(s) didn't match anything in Music Index. Since URL
 	 * parameters and the search UI have both been removed, the only way
 	 * to use this shortcode is with explicit attributes - so this message
-	 * doubles as inline usage instructions. A "V4V MusicLink" heading sits
+	 * doubles as inline usage instructions. A "V4V MusicLinker" heading sits
 	 * above the message so the block is identifiable wherever it appears.
 	 */
 	private function render_missing_params_message( $reason = '' ) {
 		ob_start();
 		?>
 		<div class="v4v-musiclink v4v-musiclink-missing-params">
-			<h1 class="v4v-musiclink-title"><?php esc_html_e( 'V4V MusicLink', 'v4v-musiclink' ); ?></h1>
-			<p class="v4v-musiclink-error"><?php echo esc_html( $reason ? $reason : __( 'Missing parameter(s)', 'v4v-musiclink' ) ); ?></p>
-			<p><?php esc_html_e( 'params:', 'v4v-musiclink' ); ?></p>
+			<h1 class="v4v-musiclink-title"><?php esc_html_e( 'V4V MusicLinker', 'v4v-musiclinker' ); ?></h1>
+			<p class="v4v-musiclink-error"><?php echo esc_html( $reason ? $reason : __( 'Missing parameter(s)', 'v4v-musiclinker' ) ); ?></p>
+			<p><?php esc_html_e( 'params:', 'v4v-musiclinker' ); ?></p>
 			<pre>album="&lt;album-guid&gt;"</pre>
 			<pre>track="&lt;track-guid&gt;" (optional)</pre>
 			<pre>header="&lt;true/false&gt;" (optional)</pre>
-			<p><?php esc_html_e( 'Usage:', 'v4v-musiclink' ); ?></p>
-			<pre>[musiclink album="&lt;album-guid&gt;"]</pre>
-			<pre>[musiclink album="&lt;album-guid&gt;" track="&lt;track-guid&gt;"]</pre>
-			<pre>[musiclink album="&lt;album-guid&gt;" header="false"]</pre>
+			<p><?php esc_html_e( 'Usage:', 'v4v-musiclinker' ); ?></p>
+			<pre>[v4v_musiclinker album="&lt;album-guid&gt;"]</pre>
+			<pre>[v4v_musiclinker album="&lt;album-guid&gt;" track="&lt;track-guid&gt;"]</pre>
+			<pre>[v4v_musiclinker album="&lt;album-guid&gt;" header="false"]</pre>
 		</div>
 		<?php
 		return ob_get_clean();
@@ -2969,7 +2972,7 @@ JS;
 			? true
 			: new WP_Error(
 				'v4v_musiclink_forbidden',
-				__( 'Only administrators may use the Music Link block endpoints.', 'v4v-musiclink' ),
+				__( 'Only administrators may use the Music Link block endpoints.', 'v4v-musiclinker' ),
 				array( 'status' => 403 )
 			);
 	}
@@ -3029,7 +3032,7 @@ JS;
 					'title'      => $track_data['title'],
 					'subtitle'   => trim( sprintf(
 						/* translators: 1: album title, 2: artist name */
-						__( 'from %1$s · %2$s', 'v4v-musiclink' ),
+						__( 'from %1$s · %2$s', 'v4v-musiclinker' ),
 						$track_data['album_title'],
 						$track_data['artist']
 					), ' ·' ),
@@ -3046,8 +3049,8 @@ JS;
 					'track_guid' => null,
 					'title'      => $feed_data['title'],
 					'subtitle'   => $feed_data['artist']
-						? sprintf( __( 'Album by %s', 'v4v-musiclink' ), $feed_data['artist'] )
-						: __( 'Album', 'v4v-musiclink' ),
+						? sprintf( __( 'Album by %s', 'v4v-musiclinker' ), $feed_data['artist'] )
+						: __( 'Album', 'v4v-musiclinker' ),
 				);
 			}
 		}
@@ -3082,7 +3085,7 @@ JS;
 		if ( '' === $album ) {
 			return new WP_Error(
 				'v4v_musiclink_missing_album',
-				__( 'An album GUID is required for a preview.', 'v4v-musiclink' ),
+				__( 'An album GUID is required for a preview.', 'v4v-musiclinker' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -3116,7 +3119,7 @@ JS;
 		if ( '' === $album ) {
 			return new WP_Error(
 				'v4v_musiclink_bad_request',
-				__( 'An album guid is required.', 'v4v-musiclink' ),
+				__( 'An album guid is required.', 'v4v-musiclinker' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -3153,7 +3156,7 @@ JS;
 		if ( '' === $album ) {
 			return new WP_Error(
 				'v4v_musiclink_bad_request',
-				__( 'An album guid is required.', 'v4v-musiclink' ),
+				__( 'An album guid is required.', 'v4v-musiclinker' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -3161,7 +3164,7 @@ JS;
 		if ( '' !== $url && ! $this->is_valid_stored_url( $url, 'fountain' ) ) {
 			return new WP_Error(
 				'v4v_musiclink_bad_url',
-				__( 'The Fountain.fm link must be an https URL on fountain.fm.', 'v4v-musiclink' ),
+				__( 'The Fountain.fm link must be an https URL on fountain.fm.', 'v4v-musiclinker' ),
 				array( 'status' => 400 )
 			);
 		}
@@ -3203,8 +3206,8 @@ JS;
 
 	private function render_html( $links, $has_track, $album_title, $track_title, $artist, $art_url, $show_header = true ) {
 		$heading = $has_track
-			? __( 'Listen to this track:', 'v4v-musiclink' )
-			: __( 'Listen to this album:', 'v4v-musiclink' );
+			? __( 'Listen to this track:', 'v4v-musiclinker' )
+			: __( 'Listen to this album:', 'v4v-musiclinker' );
 
 		$title_line = $has_track && $track_title
 			? sprintf( '"%s" from %s', $track_title, $album_title )
@@ -3220,14 +3223,14 @@ JS;
 							<h1 class="v4v-musiclink-title"><?php echo esc_html( $title_line ); ?></h1>
 						<?php endif; ?>
 						<?php if ( $artist ) : ?>
-							<p class="v4v-musiclink-artist"><?php echo esc_html( sprintf( __( 'by %s', 'v4v-musiclink' ), $artist ) ); ?></p>
+							<p class="v4v-musiclink-artist"><?php echo esc_html( sprintf( __( 'by %s', 'v4v-musiclinker' ), $artist ) ); ?></p>
 						<?php endif; ?>
 					</div>
 					<?php if ( $art_url ) : ?>
 						<img
 							class="v4v-musiclink-art"
 							src="<?php echo esc_url( $art_url ); ?>"
-							alt="<?php echo esc_attr( $title_line ? $title_line : __( 'Album art', 'v4v-musiclink' ) ); ?>"
+							alt="<?php echo esc_attr( $title_line ? $title_line : __( 'Album art', 'v4v-musiclinker' ) ); ?>"
 							loading="lazy"
 						/>
 					<?php endif; ?>
@@ -3236,7 +3239,7 @@ JS;
 
 			<p class="v4v-musiclink-heading"><?php echo esc_html( $heading ); ?></p>
 			<?php if ( empty( $links ) ) : ?>
-				<p class="v4v-musiclink-error"><?php esc_html_e( 'No music apps are currently enabled - check Settings > V4V MusicLink.', 'v4v-musiclink' ); ?></p>
+				<p class="v4v-musiclink-error"><?php esc_html_e( 'No music apps are currently enabled - check Settings > V4V MusicLinker.', 'v4v-musiclinker' ); ?></p>
 			<?php else :
 				$random_order = (bool) get_option( 'v4v_musiclink_random_app_order', false ) && count( $links ) > 1;
 			?>
@@ -3286,9 +3289,9 @@ JS;
 
 			<?php if ( get_option( 'v4v_musiclink_show_credits', false ) ) : ?>
 				<p class="v4v-musiclink-footer">
-					<?php esc_html_e( 'Generated by', 'v4v-musiclink' ); ?>
-					<a href="https://phafe.com/musiclink"><?php esc_html_e( 'V4V MusicLink', 'v4v-musiclink' ); ?></a>.
-					<?php esc_html_e( 'Powered by', 'v4v-musiclink' ); ?>
+					<?php esc_html_e( 'Generated by', 'v4v-musiclinker' ); ?>
+					<a href="https://phafe.com/musiclink"><?php esc_html_e( 'V4V MusicLinker', 'v4v-musiclinker' ); ?></a>.
+					<?php esc_html_e( 'Powered by', 'v4v-musiclinker' ); ?>
 					<a href="https://musicindex.org">MusicIndex.org</a>
 				</p>
 			<?php endif; ?>
@@ -3296,11 +3299,11 @@ JS;
 
 		<div class="v4v-musiclink-modal-overlay" id="v4v-musiclink-fountain-modal">
 			<div class="v4v-musiclink-modal" role="dialog" aria-modal="true">
-				<p class="v4v-musiclink-modal-message"><?php esc_html_e( 'Unable to generate Fountain.fm link for this release.', 'v4v-musiclink' ); ?></p>
-				<p class="v4v-musiclink-modal-message"><?php esc_html_e( 'Please use Fountain\'s search.', 'v4v-musiclink' ); ?></p>
+				<p class="v4v-musiclink-modal-message"><?php esc_html_e( 'Unable to generate Fountain.fm link for this release.', 'v4v-musiclinker' ); ?></p>
+				<p class="v4v-musiclink-modal-message"><?php esc_html_e( 'Please use Fountain\'s search.', 'v4v-musiclinker' ); ?></p>
 				<div class="v4v-musiclink-modal-actions">
-					<button type="button" class="v4v-musiclink-modal-btn v4v-musiclink-modal-cancel"><?php esc_html_e( 'Cancel', 'v4v-musiclink' ); ?></button>
-					<button type="button" class="v4v-musiclink-modal-btn v4v-musiclink-modal-ok"><?php esc_html_e( 'OK', 'v4v-musiclink' ); ?></button>
+					<button type="button" class="v4v-musiclink-modal-btn v4v-musiclink-modal-cancel"><?php esc_html_e( 'Cancel', 'v4v-musiclinker' ); ?></button>
+					<button type="button" class="v4v-musiclink-modal-btn v4v-musiclink-modal-ok"><?php esc_html_e( 'OK', 'v4v-musiclinker' ); ?></button>
 				</div>
 			</div>
 		</div>
@@ -3309,4 +3312,4 @@ JS;
 	}
 }
 
-new V4V_Music_Link_Resolver();
+new V4V_MusicLinker();

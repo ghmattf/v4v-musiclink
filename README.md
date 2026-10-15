@@ -1,4 +1,4 @@
-# V4V MusicLink (standard)
+# V4V MusicLinker (standard)
 
 An alternative to pod.link for music indexed by musicindex.org, providing direct links to the artist/album/song for Podcasting 2.0 music player apps such as fountain.fm, v4vmusic.com, stablekraft.app and podtunes.app.
 
@@ -15,12 +15,12 @@ This is the **standard** version of the WordPress plugin. The Pro version lives 
 Usage:
 
 ```
-[musiclink album="{album-guid}"]
-[musiclink album="{album-guid}" track="{track-guid}"]
-[musiclink album="{album-guid}" track="{track-guid}" header="false"]
+[v4v_musiclinker album="{album-guid}"]
+[v4v_musiclinker album="{album-guid}" track="{track-guid}"]
+[v4v_musiclinker album="{album-guid}" track="{track-guid}" header="false"]
 ```
 
-A bare `[musiclink]` (or one with unexpected attributes) shows a usage message instead of guessing at intent. `header="true"` / `header="false"` overrides the site-wide "Release header" setting for that instance. There is no URL-parameter or front-end search UI mode in this version.
+A bare `[v4v_musiclinker]` (or one with unexpected attributes) shows a usage message instead of guessing at intent. `header="true"` / `header="false"` overrides the site-wide "Release header" setting for that instance. There is no URL-parameter or front-end search UI mode in this version. The pre-1.0.0 tag `[musiclink]` is kept as a deprecated alias, so existing content keeps working; new placements should use `[v4v_musiclinker]`.
 
 ### Block editor
 
@@ -34,7 +34,7 @@ For Gutenberg posts and pages, insert the **Music Link** block (administrators o
 
 Once a release is selected, the block canvas shows it **exactly as the public page will**: a live preview served by the block's own `GET /render` route, which runs the real shortcode against the cache row - release header, track/album titles, artist, artwork, and the buttons in admin order, styled with the plugin's own front-end CSS. Editor-only adjustments keep the preview at page-preview scale: the album art renders as a 120px thumbnail (the public 200px size is too heavy for the edit page), the attribution footer and modal markup that follow the button list are omitted, and the buttons themselves are inert; an unknown GUID previews the same "Album/Song not found" message the front end would show.
 
-The block stores the assembled `[musiclink ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search, the preview, and the link field are editor-only, behind `manage_options`.
+The block stores the assembled `[v4v_musiclinker ...]` string as its content, so published pages run through the same shortcode path as hand-typed ones. Nothing in this feature appears on the front end - the search, the preview, and the link field are editor-only, behind `manage_options`.
 
 ## Target apps
 
@@ -45,7 +45,7 @@ The block stores the assembled `[musiclink ...]` string as its content, so publi
 | v4vmusic.com | Formulaic GUID-based URL (`/lookup/{album}` or `/lookup/{album}/{track}`) |
 | Fountain.fm | Performs no Fountain discovery - the button uses a link stored on the cache row (set on the Cache tab) when one exists; otherwise it lands on `https://fountain.fm/search?q="…"` pre-filled with the release title (exact-phrase search), or on `fountain.fm/discover` when no title is known. (Fountain resolution and self-healing are Pro features.) |
 
-Under **Settings → V4V MusicLink** each app can be individually disabled, given a custom icon URL, given an **icon background colour** (or left transparent via "None" — useful for transparent PNGs; the colour sits behind the 40px icon on the front end and the table preview updates live), and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
+Under **Settings → V4V MusicLinker** each app can be individually disabled, given a custom icon URL, given an **icon background colour** (or left transparent via "None" — useful for transparent PNGs; the colour sits behind the 40px icon on the front end and the table preview updates live), and positioned with the **Order** controls. A **Random order** tickbox there additionally shuffles the rendered buttons into a new random order on every page load — refreshes and cached pages included — while the order saved in settings itself never changes (and a visitor without JavaScript simply sees the configured order).
 
 ## Data source
 
@@ -61,7 +61,7 @@ Linting and testing use a **portable PHP CLI kept in `php/`** — there is no sy
 
 ```bash
 ./php/install.sh   # first run / after a fresh clone (binary is gitignored)
-./php/php -l wp_plugin/v4v-musiclink.php
+./php/php -l wp_plugin/v4v_musiclinker.php
 ```
 
 Run the whole regression suite with `for f in tests/test_*.php tests/*_test.php; do ./php/php "$f"; done` — see the [Regression tests section of CONTRIBUTING.md](CONTRIBUTING.md#regression-tests).

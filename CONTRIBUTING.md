@@ -6,7 +6,7 @@
 
 ```bash
 ./php/php -v                                # check it works
-./php/php -l wp_plugin/v4v-musiclink.php
+./php/php -l wp_plugin/v4v_musiclinker.php
 ./php/install.sh                            # install or repair it (idempotent)
 ```
 
@@ -37,7 +37,13 @@ This project is tracked with git and hosted at [github.com/ghmattf/v4v-musiclink
 - The version appears in **two places** in the plugin file — keep both in sync:
   1. The plugin header: ` * Version: X.Y.Z`
   2. The script cache-buster: `wp_register_script( …, 'X.Y.Z', true );`
-- Plugin: V4V Music Link Resolver — `wp_plugin/v4v-musiclink.php`. The Pro plugin is versioned independently in the sibling repository `ghmattf/v4v-musiclink-pro`.
+  The third place, `wp_plugin/readme.txt`'s `Stable tag: X.Y.Z`, is NOT touched
+  by `bump-version.sh` — update it by hand for every release (wp.org rejects a
+  Stable tag that does not match the released version).
+- Plugin: V4V MusicLinker — `wp_plugin/v4v_musiclinker.php` (renamed from
+  `v4v-musiclink.php` at 1.0.0; tags before `v1.0.0` still use the old path).
+  The Pro plugin is versioned independently in the sibling repository
+  `ghmattf/v4v-musiclink-pro`.
 
 ### Automated: `./bump-version.sh`
 
@@ -45,15 +51,15 @@ This project is tracked with git and hosted at [github.com/ghmattf/v4v-musiclink
 ./bump-version.sh   # bump the plugin, update both version strings, refresh the backup copy, commit it
 ```
 
-The script increments the patch version in both places, refreshes the archive copy (below), then commits **only the plugin file it just changed** with a `Bump Resolver x.y.z` subject — anything else you have staged or edited is left alone, and the archive copy is gitignored so it never rides along. If the directory is not a git work tree it skips the commit and says so.
+The script increments the patch version in both places, refreshes the archive copy (below), then commits **only the plugin file it just changed** with a `Bump MusicLinker x.y.z` subject — anything else you have staged or edited is left alone, and the archive copy is gitignored so it never rides along. If the directory is not a git work tree it skips the commit and says so.
 
 ## Archive copies
 
-Once a PHP file has been updated, a copy must be placed in the plugin's `archive/` subdirectory, with the version number appended to the filename. Example: version 1.22.1 of `v4v-musiclink.php` must have a copy named `v4v-musiclink-v1.22.1.php` created in the `wp_plugin/archive/` subdirectory. `bump-version.sh` creates these copies automatically.
+Once a PHP file has been updated, a copy must be placed in the plugin's `archive/` subdirectory, with the version number appended to the filename. Example: version 1.0.1 of `v4v_musiclinker.php` must have a copy named `v4v_musiclinker-v1.0.1.php` created in the `wp_plugin/archive/` subdirectory (pre-1.0.0 backups keep the old `v4v-musiclink-v*` naming). `bump-version.sh` creates these copies automatically.
 
 > **Note:** git tags are the authoritative record of any past release; the `archive/` copies are kept as a plain-file backup per the original build instructions. They are **out of scope for review** — exclude `archive/` from linting, searches, audits, and reports (agents: see `AGENTS.md`, which OpenCode enforces via `opencode.jsonc`). Retrieve any past version with:
 > ```bash
-> git show v1.22.1:wp_plugin/v4v-musiclink.php
+> git show v1.0.1:wp_plugin/v4v_musiclinker.php
 > ```
 
 ## Release checklist
@@ -63,18 +69,18 @@ Once a PHP file has been updated, a copy must be placed in the plugin's `archive
 
    ```bash
    ./php/install.sh   # only if ./php/php is missing
-   ./php/php -l wp_plugin/v4v-musiclink.php
+   ./php/php -l wp_plugin/v4v_musiclinker.php
    ```
 3. Run the regression harnesses — see [Regression tests](#regression-tests) (all `tests/test_*.php` / `tests/*_test.php` files must report `0 failed`).
-4. Bump the version: `./bump-version.sh` — this commits the bumped plugin file itself, subject `Bump Resolver x.y.z`.
+4. Bump the version: `./bump-version.sh` — this commits the bumped plugin file itself, subject `Bump MusicLinker x.y.z`.
 5. Add a `CHANGELOG.md` entry for the new version.
-6. Commit the docs: `git add CHANGELOG.md && git commit -m "Resolver x.y.z: …"` — plus `OUTSTANDING.md` if any statuses changed. Never `git add -A` (it would sweep in unrelated edits and local scratch).
-7. Tag the release: `git tag -a vX.Y.Z -m "Resolver x.y.z"` — then push with `git push && git push origin vX.Y.Z`.
+6. Commit the docs: `git add CHANGELOG.md && git commit -m "MusicLinker x.y.z: …"` — plus `OUTSTANDING.md` if any statuses changed. Never `git add -A` (it would sweep in unrelated edits and local scratch).
+7. Tag the release: `git tag -a vX.Y.Z -m "V4V MusicLinker x.y.z"` — then push with `git push && git push origin vX.Y.Z`.
 
 ## Naming conventions (why they matter)
 
 The Pro plugin (`ghmattf/v4v-musiclink-pro`) may be installed on the same WordPress instance as this plugin:
 
-- Separate classes, shortcodes (`[musiclink]` vs `[musiclink_pro]`), option names (`v4v_musiclink_*` vs `v4v_musiclink_pro_*`), asset handles, cache keys, and admin page slugs.
+- Separate classes, shortcodes (`[v4v_musiclinker]` vs `[musiclink_pro]`; this plugin also keeps `[musiclink]` as a deprecated alias for pre-1.0.0 content), option names (`v4v_musiclink_*` vs `v4v_musiclink_pro_*`), asset handles, cache keys, and admin page slugs.
 - Pro front-end CSS classes/IDs carry a `-pro` infix (`v4v-musiclink-pro`, `v4v-musiclink-pro-fountain-modal`) so both shortcodes can appear on one page without selector or duplicate-ID collisions.
 - This plugin's REST namespace (`v4v-musiclink/v1`) must stay distinct from anything Pro adds later.

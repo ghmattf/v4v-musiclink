@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# bump-version.sh - bump the patch version of the V4V MusicLink (standard)
+# bump-version.sh - bump the patch version of the V4V MusicLinker (standard)
 # plugin, update both version strings in the PHP file, refresh the archive
 # copy, and commit the plugin file.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
-file="wp_plugin/v4v-musiclink.php"
+file="wp_plugin/v4v_musiclinker.php"
 
 [ -f "$file" ] || { echo "ERROR: $file not found" >&2; exit 1; }
 
@@ -33,8 +33,8 @@ fi
 
 # Refresh the archive copy (gitignored backup history).
 mkdir -p wp_plugin/archive
-cp "$file" "wp_plugin/archive/v4v-musiclink-v${new}.php"
-echo "Bumped $file: $cur -> $new (wp_plugin/archive/v4v-musiclink-v${new}.php)"
+cp "$file" "wp_plugin/archive/v4v_musiclinker-v${new}.php"
+echo "Bumped $file: $cur -> $new (wp_plugin/archive/v4v_musiclinker-v${new}.php)"
 
 # --- Commit just the plugin file that was bumped ---------------------------
 # Only this path is committed: anything else sitting in the index (or an
@@ -42,11 +42,11 @@ echo "Bumped $file: $cur -> $new (wp_plugin/archive/v4v-musiclink-v${new}.php)"
 # just wrote is gitignored, so it never rides along.
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-	echo "Not a git work tree - 'Bump Resolver ${new}' left uncommitted." >&2
+	echo "Not a git work tree - 'Bump MusicLinker ${new}' left uncommitted." >&2
 elif git diff --quiet HEAD -- "$file"; then
-	echo "Nothing to commit for: Resolver ${new}"
+	echo "Nothing to commit for: MusicLinker ${new}"
 else
-	git commit -m "Bump Resolver ${new}" -- "$file"
+	git commit -m "Bump MusicLinker ${new}" -- "$file"
 fi
 
 echo "Now add a CHANGELOG.md entry (+ OUTSTANDING.md statuses), commit those, and tag."

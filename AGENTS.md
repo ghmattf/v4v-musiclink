@@ -4,7 +4,8 @@
 
 The project consists of:
 
-- `wp_plugin/v4v-musiclink.php` — the standard WordPress plugin (current release)
+- `wp_plugin/v4v_musiclinker.php` — the standard WordPress plugin (current release;
+  renamed from `v4v-musiclink.php` at 1.0.0)
 - `tests/` — tracked regression suite (`test_*.php` / `*_test.php` harnesses,
   `wpstub/`)
 - `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `OUTSTANDING.md`
@@ -14,7 +15,8 @@ The **Pro** plugin lives in the sibling repository
 [`ghmattf/v4v-musiclink-pro`](https://github.com/ghmattf/v4v-musiclink-pro) (split
 2026-10-11; before that both plugins shared one repository). The two plugins
 must be able to run on the same WordPress instance without conflict — separate
-class names, shortcodes (`[musiclink]` vs `[musiclink_pro]`), option names,
+class names, shortcodes (`[v4v_musiclinker]` vs `[musiclink_pro]`; standard also
+keeps `[musiclink]` as a deprecated alias for pre-1.0.0 content), option names,
 cache tables, asset handles, and REST namespaces. Keep that in mind when
 naming anything new.
 
@@ -68,19 +70,19 @@ for this project. Maintain it as follows:
 
 Applies to code releases only (never for docs-only changes):
 
-1. Lint the plugin file: `./php/php -l wp_plugin/v4v-musiclink.php` (use the
+1. Lint the plugin file: `./php/php -l wp_plugin/v4v_musiclinker.php` (use the
    project PHP from `php/install.sh`; no system PHP).
 2. Run the regression harnesses: `./php/php tests/<harness>.php` for each
    `tests/test_*.php` / `tests/*_test.php` (8 files).
 3. `./bump-version.sh` — bumps the plugin header and the script cache-buster,
    refreshes the backup copies under `wp_plugin/archive/` (gitignored,
    never committed), and **commits the bumped plugin file itself** — only that
-   path, with subject `Bump Resolver x.y.z`.
+   path, with subject `Bump MusicLinker x.y.z`.
 4. Add a `CHANGELOG.md` entry at the top, Keep-a-Changelog style, dated today:
-   `## Resolver (v4v-musiclink) — [x.y.z] - YYYY-MM-DD`.
+   `## V4V MusicLinker (v4v-musiclinker) — [x.y.z] - YYYY-MM-DD`.
 5. Commit `CHANGELOG.md` (plus `OUTSTANDING.md` if statuses changed): subject
-   `Resolver x.y.z: …`. Step 3 already committed the plugin file; `tmp/` and
+   `MusicLinker x.y.z: …`. Step 3 already committed the plugin file; `tmp/` and
    `archive/` stay uncommitted. Never `git add -A` here.
-6. Annotated, `v`-prefixed tags: `git tag -a vx.y.z -m "Resolver x.y.z"`. Then
+6. Annotated, `v`-prefixed tags: `git tag -a vx.y.z -m "V4V MusicLinker x.y.z"`. Then
    push to GitHub: `git push && git push origin vx.y.z`.
 7. Update `OUTSTANDING.md` statuses in the same turn; remove any item just shipped.
