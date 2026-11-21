@@ -332,6 +332,142 @@ all four code/docs blockers below are fixed in 1.22.31.
 
 ---
 
+## O28. Fountain official API support (both plugins) - port p20-link-resolver's no-key lookup
+
+**Status: Planned** (user picked 2026-11-21, for both plugins, pointing at
+the podcast sibling's working implementation; implement only on request).
+
+**Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink`
+for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split -
+implement only this repo's half.**
+
+**What:** move Fountain deep-link resolution onto the documented public API
+(`api.fountain.fm/v1`, docs `fountain.fm/docs.md`) as `p20-link-resolver`
+already has, instead of the unofficial paths: Pro's Next.js server action +
+self-healing `next-action` fingerprint (`fountain_try_resolve()` +
+`fountain_autodetect_next_actions()` - breaks on every Fountain redeploy,
+the O7/O9/O11 churn), and standard's no-resolve design at all (its button is
+only cache row -> `fountain.fm/search?q="title"` -> `discover`; render block
+std 2316-2356, deliberate per the comment there).
+
+**The p20 implementation to port (verified live in that repo 2026-11-12/16):**
+- `POST api.fountain.fm/v1/search/lookup` - guid -> opaque Fountain id, **no
+  API key required** (`fountain_id()` / `fountain_lookup()`, p20 AGENTS
+  Gotchas + README Fountain section).
+- `GET api.fountain.fm/v1/content/{type}:id:{id}` - reverse: id ->
+  `hit._guid` (+ parent guid for episodes).
+- Miss discipline: definitive (200/404) vs unreliable (`~` sentinel outside
+  the id alphabet) cached separately, 30-day hit TTL, derived URL remembered
+  on the cache row (`fountain_url` / `fountain_date`, 30 days) so a fresh
+  row serves with no Fountain call at all.
+- p20's own OUTSTANDING item #7 records this port as the music repos' half.
+
+**Music-specific unknowns (probe before coding):**
+1. Does `/v1/search/lookup` accept Music Index album/track guids? Its `_guid`
+   is documented as "when the content originates from an RSS feed" - music
+   feeds are RSS so plausibly yes, **unverified for music**. Probe with one
+   known album guid + one track guid from Matt's machine (the agent sandbox
+   usually cannot reach fountain.fm / api.fountain.fm; p20's AGENTS records
+   reachability from Matt's machine on 2026-11-12 - don't assume it holds).
+2. If lookup doesn't fit: `POST /v1/search/content` with
+   `types:["TRACK","ALBUM"]` - but that endpoint **requires a Bearer key**
+   (O10's 2026-09-26 probe: 403 with none/bogus; keys `fountain_...` from
+   `fountain.fm/studio/projects`, "API and MCP calls are unlimited on every
+   plan" - free to call, but behind a paid plan). Hits carry `_guid`
+   (optional) and `_id` = `{type}:id:{id}` - strip the prefix before
+   building `https://fountain.fm/{segment}/{id}`
+   (`fountain_path_segment()` already maps the uppercase types).
+
+**Where:**
+- Pro: `fountain_resolve()` 3666, `fountain_try_resolve()` 3743,
+  `fountain_autodetect_next_actions()` 3889, `extract_fountain_hit()` 4028,
+  `fountain_path_segment()` 4071, render block 3255-3352,
+  `get_cached_fountain_url()` 1313, `store_fountain_link()` 1337.
+- Standard: render block 2316-2356, `get_cached_fountain_url()` 864 - no
+  resolver exists today (deliberate); this item gives standard an
+  API-backed resolver too, per the user's request.
+
+**Plan sketch:** probe unknowns 1-2 -> port Pro's `fountain_resolve()` to
+the no-key lookup first, keeping the server-action as automatic fallback
+(or drop it if the user prefers at implement time); give standard a
+`fountain_id()`-style resolver feeding its render block; precedence stays
+cache row (incl. hand-edited; O18 attribute when picked) -> API resolve ->
+generic search/discover fallback; only real deep links are ever stored (the
+never-store-fallbacks rule at Pro 3300-3304); copy p20's miss-caching
+discipline and add a schema constant to invalidate remembered lookups; tests
+in `tests/`, README + CHANGELOG; ship independently per repo.
+
+**Relationship to existing items:** absorbs O10 (Pro) when it ships - remove
+O10 then; O10 keeps the 2026-09-26 probe record until that point. Also the
+long-term fix for O7/O9/O11's redeploy churn (self-heal becomes unnecessary
+for resolved releases). Supersedes the 2026-09-26 decline of "Fountain
+official-API migration" under Closed decisions - re-requested by the user
+2026-11-21 with p20's working no-key precedent.
+---
+
+## O29. Paste an app share link in search -> jump straight to that release (both plugins)
+
+**Status: Planned** (user picked 2026-11-21, for both plugins, pointing at
+p20-link-resolver's search; implement only on request).
+
+**Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink`
+for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split -
+implement only this repo's half.**
+
+**What:** today a pasted share link falls into `mi_search_hits()` (Music
+Index title search) and finds nothing. Recognise a pasted share URL for one
+of the target apps and jump straight to that release instead - the feature
+`p20-link-resolver` ships (README "Search UI"; its `ajax_search()` detection
+block + `search_direct_link()`).
+
+**Links to recognise (the apps these plugins themselves emit, so reversal is
+mostly pure parsing):**
+- **StableKraft** `stablekraft.app/album/{album guid}[?track={track guid}]`
+  (std 2278-2286 / pro 3207-3215) - guids in the URL, **no HTTP**.
+- **PodTunes** `podtunes.app/g/{album guid}[/{track guid}]` (std 2290-2301
+  / pro mirror just above its fountain block) - no HTTP.
+- **v4vmusic.com** `v4vmusic.com/lookup/{album guid}[/{track guid}]` (std
+  2303-2314 / pro mirror) - no HTTP.
+- **Fountain** `fountain.fm/{segment}/{id}`: match the cache row's stored
+  `fountain_url` first (no HTTP - both plugins carry the column), then
+  reverse through `GET api.fountain.fm/v1/content/{type}:id:{id}` ->
+  `hit._guid` (p20's `search_fountain_link()` -> `fountain_reverse()`,
+  verified live there 2026-11-16). Music unknown: does that reversed RSS
+  guid equal the Music Index guid? Same probe as O28 unknown 1.
+
+**Contract to port** (p20 `search_direct_link()`, p20-link-resolver.php
+~685, same null / array() / false everywhere):
+- **null** = not a share link -> fall through to the normal MI title search
+  (plain titles must never route through this - the detection regex returns
+  null for non-app input).
+- **array()** = recognised but definitively absent -> "no results"; must
+  NOT fall through to title-searching the URL text.
+- **false** = recognised but unreliable (transport/5xx) -> empty result,
+  retried next time.
+- direct payload = `array( 'album_guid' => ..., 'track_guid' => ..., ... )`
+  so the UI jumps straight to the release, same result shape the existing
+  MI hits produce.
+- Paste hygiene: schemeless gets `https://` prepended, `www.` stripped,
+  query strings ignored; every pasted guid through `guard_guid()`.
+
+**Where:** std `rest_search()` 2991 (detection ahead of `mi_search_hits()`
+2865, behind the block/admin search UI); Pro `ajax_search()` 3565 (nonce
+already checked; decide placement vs `is_rate_limited( 'search', 30,
+MINUTE_IN_SECONDS )` 3586 - pure-parse shapes spend no upstream budget, the
+Fountain reverse does, so spend the budget only on upstream-dependent
+shapes).
+
+**Caching:** transient per reversed ref with p20's definitive-vs-soft split
+(p20: `p20l_frv_*`, `FOUNTAIN_FAIL_TTL` / `SOFT_FAIL_TTL`); add a schema
+constant so bumping it invalidates remembered reversals.
+
+**Plan sketch:** detection helpers mirroring p20's split (Fountain first,
+then a host switch for the three guid-carrying apps); wire into both search
+endpoints; extend `tests/` (pure-parse shapes assert no HTTP; Fountain
+reverse mocked; plain-title search unchanged); README + CHANGELOG; ship
+independently per repo.
+---
+
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
 
 - **O27 rebrand decisions** (all settled 2026-10-14 while implementing,
@@ -412,7 +548,8 @@ all four code/docs blockers below are fixed in 1.22.31.
 - **Fountain official-API migration + spoofed-UA transparency fix**
   (offered as O10 options 2026-09-26): declined that day - user chose to
   stop after the unauthenticated probe. O10 carries the recorded probe data;
-  re-propose only on request.
+  re-propose only on request. **Re-requested by the user 2026-11-21 - now
+  O28**, with p20-link-resolver's working no-key lookup as the precedent.
 - **O11 fix approach** (settled 2026-10-05): probe every detected
   `next-action` candidate rather than tighten the near-"search" heuristic,
   and skip O10's official API (Step 0) because O10 needs a paid key and is
