@@ -405,70 +405,48 @@ official-API migration" under Closed decisions - re-requested by the user
 2026-11-21 with p20's working no-key precedent.
 ---
 
-## O29. Paste an app share link in search -> jump straight to that release (both plugins)
+## O30. Cache-tab Fountain link description promises an automatic re-store that standard never performs (stale copy)
 
-**Status: Planned** (user picked 2026-11-21, for both plugins, pointing at
-p20-link-resolver's search; implement only on request).
+**Status: Open** (found 2026-11-22 while verifying where Fountain links come
+from; awaiting triage).
 
-**Applies to both plugins; also tracked in the sibling repository (`ghmattf/v4v-musiclink`
-for standard / `ghmattf/v4v-musiclink-pro` for Pro) since the 2026-10-11 repo split -
-implement only this repo's half.**
+**What:** the field description under the Cache tab's inline "Fountain.fm
+link" edit (`wp_plugin/v4v_musiclinker.php` ~:1193, text *"Leave blank to
+clear it: the next page view re-runs the Fountain search and stores the
+result again"*) describes behaviour the standard plugin does not have.
+Standard performs no Fountain lookup at all (the only outbound
+`wp_remote_get` is the Music Index API, :2797) and never persists the
+render block's search/discover fallbacks (:2344-2345 "neither is ever
+persisted to the cache row"; header :79-81 "this version never re-resolves
+a link"). The only writes to `fountain_url` are the two manual admin inputs
+- Cache tab `handle_update_cache_row()` :1274 and the block editor's
+Fountain panel via REST `PUT /v4v-musiclink/v1/row` :3139 - plus blanking
+through the clear action :1382 and the literal `''` on new-row insert
+(`mi_store_mi_fields()` :2582).
 
-**What:** today a pasted share link falls into `mi_search_hits()` (Music
-Index title search) and finds nothing. Recognise a pasted share URL for one
-of the target apps and jump straight to that release instead - the feature
-`p20-link-resolver` ships (README "Search UI"; its `ajax_search()` detection
-block + `search_direct_link()`).
+**Why:** misleading admin copy: an admin who blanks a link is told the next
+view will restore it automatically; in standard the button silently drops to
+the Fountain search fallback and stays there until a link is pasted again.
+The sentence reads like Pro's behaviour carried across the repo split - in
+Pro it is roughly accurate (Pro resolves and stores deep links via
+`store_fountain_link()` :1337, called at :3305/:3325; same string at pro
+:1677).
 
-**Links to recognise (the apps these plugins themselves emit, so reversal is
-mostly pure parsing):**
-- **StableKraft** `stablekraft.app/album/{album guid}[?track={track guid}]`
-  (std 2278-2286 / pro 3207-3215) - guids in the URL, **no HTTP**.
-- **PodTunes** `podtunes.app/g/{album guid}[/{track guid}]` (std 2290-2301
-  / pro mirror just above its fountain block) - no HTTP.
-- **v4vmusic.com** `v4vmusic.com/lookup/{album guid}[/{track guid}]` (std
-  2303-2314 / pro mirror) - no HTTP.
-- **Fountain** `fountain.fm/{segment}/{id}`: match the cache row's stored
-  `fountain_url` first (no HTTP - both plugins carry the column), then
-  reverse through `GET api.fountain.fm/v1/content/{type}:id:{id}` ->
-  `hit._guid` (p20's `search_fountain_link()` -> `fountain_reverse()`,
-  verified live there 2026-11-16). Music unknown: does that reversed RSS
-  guid equal the Music Index guid? Same probe as O28 unknown 1.
-
-**Contract to port** (p20 `search_direct_link()`, p20-link-resolver.php
-~685, same null / array() / false everywhere):
-- **null** = not a share link -> fall through to the normal MI title search
-  (plain titles must never route through this - the detection regex returns
-  null for non-app input).
-- **array()** = recognised but definitively absent -> "no results"; must
-  NOT fall through to title-searching the URL text.
-- **false** = recognised but unreliable (transport/5xx) -> empty result,
-  retried next time.
-- direct payload = `array( 'album_guid' => ..., 'track_guid' => ..., ... )`
-  so the UI jumps straight to the release, same result shape the existing
-  MI hits produce.
-- Paste hygiene: schemeless gets `https://` prepended, `www.` stripped,
-  query strings ignored; every pasted guid through `guard_guid()`.
-
-**Where:** std `rest_search()` 2991 (detection ahead of `mi_search_hits()`
-2865, behind the block/admin search UI); Pro `ajax_search()` 3565 (nonce
-already checked; decide placement vs `is_rate_limited( 'search', 30,
-MINUTE_IN_SECONDS )` 3586 - pure-parse shapes spend no upstream budget, the
-Fountain reverse does, so spend the budget only on upstream-dependent
-shapes).
-
-**Caching:** transient per reversed ref with p20's definitive-vs-soft split
-(p20: `p20l_frv_*`, `FOUNTAIN_FAIL_TTL` / `SOFT_FAIL_TTL`); add a schema
-constant so bumping it invalidates remembered reversals.
-
-**Plan sketch:** detection helpers mirroring p20's split (Fountain first,
-then a host switch for the three guid-carrying apps); wire into both search
-endpoints; extend `tests/` (pure-parse shapes assert no HTTP; Fountain
-reverse mocked; plain-title search unchanged); README + CHANGELOG; ship
-independently per repo.
+**Plan sketch:** reword the standard string to match reality, e.g. "Leave
+blank to clear it: the button falls back to a Fountain search for the
+release title until a link is pasted here again - this plugin never
+resolves links itself." Leave Pro's copy alone (accurate there) unless the
+user wants both reworded. No test asserts the string (grep of `tests/`
+empty); needs lint + harness run + a release to reach the plugin. Confirm
+wording with the user first (copy change, trivial otherwise).
 ---
 
 ## Closed decisions (context only - not work items; do not re-open or re-propose)
+
+- **O29 paste-a-share-link search jump** (declined for standard
+  2026-11-21): the user judged the feature not relevant to the standard
+  plugin and removed it from this repo's list (the Pro copy stays tracked
+  in `ghmattf/v4v-musiclink-pro`). Re-propose only on request.
 
 - **O27 rebrand decisions** (all settled 2026-10-14 while implementing,
   recommendations adopted): `[musiclink]` kept as a deprecated alias
